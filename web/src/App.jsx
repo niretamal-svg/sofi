@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import LoginPage from './pages/LoginPage.jsx';
 import VacantesPage from './pages/VacantesPage.jsx';
+import PublicacionPortalesPage from './pages/PublicacionPortalesPage.jsx';
 import { AuthProvider, useAuth } from './contexts/AuthContext.jsx';
 
 function Dashboard() {
@@ -28,7 +29,15 @@ function Dashboard() {
           <button onClick={() => navigate('/vacantes')}>
             Ir a vacantes
           </button>
-          <button onClick={handleLogout}>Cerrar sesión</button>
+
+          {/* 👇 NUEVO BOTÓN */}
+          <button onClick={() => navigate('/publicacion-portales')}>
+            Ir a publicación
+          </button>
+
+          <button onClick={handleLogout}>
+            Cerrar sesión
+          </button>
         </div>
       </div>
     </div>
@@ -44,7 +53,9 @@ export default function App() {
   return (
     <AuthProvider>
       <Routes>
+
         <Route path="/login" element={<LoginPage />} />
+
         <Route
           path="/"
           element={
@@ -53,6 +64,7 @@ export default function App() {
             </PrivateRoute>
           }
         />
+
         <Route
           path="/vacantes"
           element={
@@ -61,6 +73,17 @@ export default function App() {
             </PrivateRoute>
           }
         />
+
+        {/* 👇 NUEVA RUTA */}
+        <Route
+          path="/publicacion-portales"
+          element={
+            <PrivateRoute>
+              <PublicacionPortalesPage />
+            </PrivateRoute>
+          }
+        />
+
       </Routes>
     </AuthProvider>
   );

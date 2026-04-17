@@ -6,11 +6,13 @@ import {
   deleteVacante
 } from '../controllers/vacanteController.js';
 
+import { authenticateToken } from '../middlewares/authenticateToken.js';
+
 const router = Router();
 
-router.get('/', getVacantes);
-router.post('/', createVacante);
-router.put('/:id', updateVacante);
-router.delete('/:id', deleteVacante);
+router.get('/', authenticateToken, getVacantes);
+router.post('/', authenticateToken, createVacante);
+router.put('/:id', authenticateToken, updateVacante);
+router.delete('/:id', authenticateToken, deleteVacante);
 
 export default router;

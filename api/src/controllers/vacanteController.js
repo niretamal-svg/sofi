@@ -15,7 +15,7 @@ export const getVacantes = async (req, res, next) => {
 
 export const createVacante = async (req, res, next) => {
   try {
-    const usuarioId = req.user?._id || req.user?.id;
+    const usuarioId = req.user?.sub || req.user?._id || req.user?.id;
 
     if (!usuarioId) {
       return res.status(401).json({
