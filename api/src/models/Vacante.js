@@ -48,4 +48,4 @@ const vacanteSchema = new mongoose.Schema(
   }
 );
 
-export const Vacante = mongoose.model('Vacante', vacanteSchema);
+export default mongoose.model('Vacante', vacanteSchema);

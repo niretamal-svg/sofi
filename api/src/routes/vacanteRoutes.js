@@ -1,13 +1,16 @@
 import { Router } from 'express';
-import { getVacantes, createVacante, updateVacante } from '../controllers/vacanteController.js';
-import { authenticateToken } from '../middlewares/authenticateToken.js';
+import {
+  getVacantes,
+  createVacante,
+  updateVacante,
+  deleteVacante
+} from '../controllers/vacanteController.js';
 
 const router = Router();
-
-router.use(authenticateToken);
 
 router.get('/', getVacantes);
 router.post('/', createVacante);
 router.put('/:id', updateVacante);
+router.delete('/:id', deleteVacante);
 
 export default router;

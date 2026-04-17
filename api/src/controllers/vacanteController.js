@@ -1,98 +1,89 @@
-import { Vacante } from '../models/Vacante.js';
+import Vacante from '../models/Vacante.js';
 
-export async function getVacantes(req, res, next) {
+export const getVacantes = async (req, res, next) => {
   try {
     const vacantes = await Vacante.find().sort({ createdAt: -1 });
 
-    return res.json({
+    return res.status(200).json({
       success: true,
-      data: vacantes,
-      meta: {
-        total: vacantes.length,
-      },
+      data: vacantes
     });
   } catch (error) {
     next(error);
   }
-}
+};
 
-export async function createVacante(req, res, next) {
+export const createVacante = async (req, res, next) => {
   try {
-    const { titulo, empresa, ubicacion, modalidad, descripcion, salario, estado } = req.body;
+    const usuarioId = req.user?._id || req.user?.id;
 
-    if (!titulo || !empresa || !ubicacion || !descripcion || salario === undefined) {
-      return res.status(400).json({
+    if (!usuarioId) {
+      return res.status(401).json({
         success: false,
-        error: {
-          code: 'ERR_VALIDATION',
-          message: 'Faltan campos obligatorios',
-          details: [
-            'titulo, empresa, ubicacion, descripcion y salario son obligatorios',
-          ],
-        },
+        message: 'Usuario no autenticado'
       });
     }
 
-   const vacante = await Vacante.create({
-  titulo,
-  empresa,
-  ubicacion,
-  modalidad,
-  descripcion,
-  salario,
-  estado,
-  creadaPor: req.user.id || req.user._id || req.user.sub,
-});
+    const nuevaVacante = new Vacante({
+      ...req.body,
+      creadaPor: usuarioId
+    });
+
+    const vacanteGuardada = await nuevaVacante.save();
 
     return res.status(201).json({
       success: true,
-      data: vacante,
+      data: vacanteGuardada
     });
   } catch (error) {
     next(error);
   }
-}
+};
 
-export async function updateVacante(req, res, next) {
+export const updateVacante = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const vacante = await Vacante.findById(id);
+    const vacanteActualizada = await Vacante.findByIdAndUpdate(
+      id,
+      req.body,
+      { new: true }
+    );
+
+    if (!vacanteActualizada) {
+      return res.status(404).json({
+        success: false,
+        message: 'Vacante no encontrada'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: vacanteActualizada
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const deleteVacante = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const vacante = await Vacante.findByIdAndDelete(id);
 
     if (!vacante) {
       return res.status(404).json({
         success: false,
-        error: {
-          code: 'ERR_NOT_FOUND',
-          message: 'Vacante no encontrada',
-          details: [],
-        },
+        message: 'Vacante no encontrada'
       });
     }
 
-    const camposPermitidos = [
-      'titulo',
-      'empresa',
-      'ubicacion',
-      'modalidad',
-      'descripcion',
-      'salario',
-      'estado',
-    ];
-
-    camposPermitidos.forEach((campo) => {
-      if (req.body[campo] !== undefined) {
-        vacante[campo] = req.body[campo];
-      }
-    });
-
-    await vacante.save();
-
-    return res.json({
+    return res.status(200).json({
       success: true,
-      data: vacante,
+      message: 'Vacante eliminada correctamente'
     });
   } catch (error) {
     next(error);
   }
-}
+};

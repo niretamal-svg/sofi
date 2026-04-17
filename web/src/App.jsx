@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import LoginPage from './pages/LoginPage.jsx';
+import VacantesPage from './pages/VacantesPage.jsx';
 import { AuthProvider, useAuth } from './contexts/AuthContext.jsx';
 
 function Dashboard() {
@@ -16,12 +17,19 @@ function Dashboard() {
       <div className="card">
         <h1>SOFI · Primera entrega</h1>
         <p>Login funcionando correctamente.</p>
+
         <div className="user-box">
           <strong>Usuario:</strong> {user?.nombre}<br />
           <strong>Email:</strong> {user?.email}<br />
           <strong>Rol:</strong> {user?.rol}
         </div>
-        <button onClick={handleLogout}>Cerrar sesión</button>
+
+        <div style={{ display: 'flex', gap: '12px', marginTop: '16px', flexWrap: 'wrap' }}>
+          <button onClick={() => navigate('/vacantes')}>
+            Ir a vacantes
+          </button>
+          <button onClick={handleLogout}>Cerrar sesión</button>
+        </div>
       </div>
     </div>
   );
@@ -42,6 +50,14 @@ export default function App() {
           element={
             <PrivateRoute>
               <Dashboard />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/vacantes"
+          element={
+            <PrivateRoute>
+              <VacantesPage />
             </PrivateRoute>
           }
         />
