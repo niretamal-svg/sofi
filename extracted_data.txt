@@ -1,0 +1,1278 @@
+--- Extracting c:\Users\nikolas\Desktop\sofi\sofi-app-20260501T183203Z-3-001\sofi-app\docs-extracted\Docs. Reunión Jueves 30-04\SOFI_Informe_Tecnico_API.docx ---
+SOFI
+Sistema de Apoyo al Reclutamiento
+INFORME TÉCNICO
+Módulo de Publicación en Portales de Empleo
+API REST · Endpoints Internos · Integraciones Externas · Consideraciones Técnicas
+1. Introducción
+SOFI (Sistema de Apoyo al Reclutamiento) es una plataforma SaaS diseñada para automatizar y centralizar el proceso de publicación de vacantes laborales en múltiples portales de empleo. Este informe técnico describe la arquitectura de la API REST, los endpoints desarrollados internamente en FastAPI, las integraciones con servicios externos y las consideraciones técnicas críticas para el desarrollo, despliegue y mantenimiento del módulo de Publicación en Portales de Empleo.
+El módulo cubre todo el ciclo de vida de una publicación: desde la autenticación del reclutador, la creación y gestión de vacantes, la generación de perfiles de anuncio (manual o asistida por IA), la selección de portales de empleo, hasta la gestión de pagos y el seguimiento del estado de cada publicación en cada portal externo.
+1.1 Alcance del Sistema
+El módulo opera sobre la base de datos MongoDB denominada sofi_db y expone una API REST con base URL:
+Todos los endpoints requieren autenticación mediante Bearer JWT en el header Authorization, a excepción del proceso de login. Las respuestas siguen una estructura estándar con campo success, data y meta para paginación.
+1.2 Módulos Funcionales
+El sistema se organiza en seis módulos funcionales principales, cada uno con su conjunto de endpoints:
+Autenticación: gestión de sesiones JWT con login y refresco de tokens.
+Vacantes: CRUD completo del ciclo de vida de vacantes laborales.
+Perfiles de Cargo: perfiles de anuncio reutilizables con soporte de IA generativa.
+Portales de Empleo: catálogo de portales disponibles con información de cobertura y costos.
+Campañas de Publicación: flujo central multi-portal que orquesta la publicación.
+Pagos: procesamiento de transacciones para portales de costo con integración a gateway externo.
+1.3 Flujo General del Sistema
+El flujo operativo comienza con el login del reclutador. Una vez autenticado, el sistema valida sus credenciales y le presenta el catálogo de vacantes. El reclutador busca o crea una vacante, le asigna un código único, y procede a crear un perfil de cargo (manualmente o mediante la IA generativa de SOFI). Luego selecciona los portales de empleo donde publicar, visualiza una previsualización del anuncio, y si algún portal tiene costo, se inicia el proceso de pago. Una vez confirmado el pago (o si todos los portales son gratuitos), la campaña pasa a estado de publicación activa.
+2. Endpoints Internos — Desarrollo en FastAPI
+Todos los endpoints listados a continuación son desarrollados e implementados internamente en el backend FastAPI de SOFI. Se comunican directamente con la base de datos MongoDB (sofi_db) y aplican las reglas de negocio del sistema.
+2.1 Autenticación
+Gestiona el ciclo de vida de las sesiones de usuario. El access_token tiene una vigencia de 8 horas; el refresh_token persiste 30 días y debe almacenarse en una cookie httpOnly.
+Cuerpo de la solicitud: email (string, requerido) y password (string, requerido, mínimo 8 caracteres). La respuesta exitosa (200) retorna access_token, refresh_token y los datos básicos del usuario (id, nombre, email, rol). Implementa bloqueo temporal de 15 minutos tras intentos fallidos reiterados (código ERR_TOO_MANY_ATTEMPTS).
+Recibe el refresh_token en el body y retorna un nuevo access_token. Invalida el token si la cuenta fue desactivada después de su emisión.
+2.2 Gestión de Vacantes
+Endpoints para el CRUD completo del ciclo de vida de vacantes. Las vacantes poseen estados controlados (borrador, vigente, pausada, cerrada) y un código numérico secuencial auto-incrementado asignado al momento de creación.
+Soporta filtros por empresa_id, estado, categoria_id, vigente y búsqueda de texto libre (q) sobre nombre y descripción usando el índice de texto de MongoDB. Ordenamiento configurable por createdAt, codigo o nombre. La respuesta incluye datos resumidos de cada vacante con referencias a empresa y categoría.
+Campos requeridos: nombre (3–200 caracteres), empresa_id, categoria_id y estado. Verifica la existencia y estado activo de empresa y categoría antes de persistir. El código numérico es generado automáticamente por el sistema. Retorna 201 con el id y código asignados.
+Retorna el documento completo de la vacante incluyendo datos expandidos de empresa (id, nombre, logo_url), categoría (id, nombre, slug), reclutador asignado, lista de preguntas asociadas y resumen de campañas de publicación vinculadas.
+Todos los campos del body son opcionales (actualización parcial). Controla las transiciones de estado válidas: no se puede transicionar directamente desde estado 'cerrada' a otro estado (ERR_INVALID_STATE). Retorna el documento completo actualizado.
+2.3 Perfiles de Cargo
+Gestión de perfiles de anuncio reutilizables. Un perfil define el contenido del anuncio que verá el candidato en el portal: título, descripción, requisitos, beneficios y condiciones laborales. Los perfiles pueden crearse manualmente o generarse mediante el motor de IA integrado.
+Soporta filtros por empresa_id, categoria_id y búsqueda de texto (q). Ordenamiento por popularidad (-veces_usado) o fecha de creación (-createdAt). El campo veces_usado permite identificar los perfiles más utilizados para reutilización eficiente.
+Campos requeridos: nombre_perfil, titulo_anuncio (máx 200 caracteres), empresa_id, categoria_id, tipo_jornada y descripcion (máx 8000 caracteres). Campos opcionales para salario (salario_min, salario_max con validación salario_max ≥ salario_min), moneda (ISO 4217), requisitos, beneficios y configuración de IA (ia_chips, tono).
+Este endpoint invoca al servicio de IA interno para generar automáticamente el contenido del anuncio. Recibe una descripcion_libre en lenguaje natural (mínimo 20 caracteres, máximo 1000) y retorna una propuesta completa con titulo_anuncio, descripcion, requisitos, beneficios, tipo_jornada, ia_chips identificadas y sugerencias adicionales. El perfil generado NO se persiste automáticamente; el usuario debe confirmarlo y guardarlo usando POST /perfiles.
+2.4 Portales de Empleo
+Retorna el catálogo maestro de portales de empleo disponibles. Soporta filtros por paises (lista separada por comas, ISO 3166-1 alpha-2), modelo_empresa (gratis, pago, freemium, cpc), tipo (bolsa, agregador, red_social, gobierno, clasificados) y api_disponible. La respuesta incluye costo_base y moneda para que el reclutador pueda estimar el costo de la campaña antes de iniciarla.
+2.5 Campañas de Publicación
+Flujo central del módulo. Una campaña asocia una vacante con un perfil de cargo y un conjunto de portales seleccionados. El estado de la campaña (y de cada portal dentro de ella) es gestionado de forma independiente.
+Al crear la campaña, el sistema evalúa automáticamente si los portales seleccionados tienen costo. Si hay portales de pago, el estado inicial de la campaña es 'pendiente_pago'; si todos son gratuitos, pasa directamente a 'publicando'. Calcula el costo_total estimado sumando los costos de los portales de pago. Valida que la vacante no esté en estado 'cerrada'.
+Incluye el estado detallado de cada portal individual: pendiente, publicando, publicado, error o pendiente_pago. Para los portales con API disponible, registra url_publicacion, id_externo asignado por el portal y número de intentos. También incluye información del pago asociado si existe.
+Permite filtrar por empresa_id, vacante_id y estado de la campaña. Retorna listado paginado con resumen de cada campaña.
+Acepta un motivo opcional (máx 500 caracteres) que se guarda en el campo notas. No se puede cancelar una campaña ya cancelada (ERR_ALREADY_CANCELLED) ni una campaña en estado 'publicada' que tenga portales activos de pago (ERR_CANNOT_CANCEL).
+2.6 Pagos
+Gestión de transacciones de pago para campañas con portales de costo. El procesamiento es asíncrono: la API retorna inmediatamente un estado 'procesando' y actualiza el estado del pago y la campaña cuando el gateway externo confirma o rechaza la transacción.
+Métodos aceptados: tarjeta (requiere token_pago tokenizado del proveedor), transferencia y credito_sofi. La respuesta (202) incluye un redirect_url para flujos que requieren 3DS u OTP. Errores específicos para campañas sin costo (ERR_CAMPANA_SIN_COSTO) y pagos duplicados (ERR_ALREADY_PAID).
+Incluye el estado actual del pago (pendiente, procesando, completado, fallido, reembolsado), referencia externa del proveedor, y desglose de costos por portal para auditoría.
+3. Integración con APIs Externas
+SOFI integra tres categorías de servicios externos que son esenciales para el funcionamiento del módulo de publicación: portales de empleo con API disponible, un gateway de pagos y un servicio de IA generativa. Estas integraciones están desacopladas del núcleo interno y se gestionan mediante referencias seguras a secrets en vault.
+3.1 Portales de Empleo con API Disponible
+Dentro del catálogo de portales, aquellos con el campo api_disponible: true cuentan con integración directa. Los campos api_endpoint y api_key_ref (referencia al secret en vault, nunca la clave en texto plano) habilitan al sistema a publicar automáticamente sin intervención manual.
+El subdocumento publicacion_portal (embebido en publicaciones_campana.portales[]) registra el ciclo de vida de cada publicación individual en portales externos, incluyendo:
+url_publicacion: URL del anuncio publicado en el portal externo (disponible tras publicación exitosa).
+id_externo: ID asignado por el portal externo para referencia y gestión posterior.
+intentos (Int32): contador de intentos de publicación para manejo de reintentos.
+ultimo_intento (Date): timestamp del último intento, para backoff exponencial.
+error_msg (String): mensaje de error del último intento fallido para diagnóstico.
+publicado_en (Date): timestamp de publicación exitosa confirmada por el portal.
+Para portales sin API disponible, la publicación es manual: el sistema notifica al reclutador las instrucciones específicas del portal y registra la publicación una vez que el reclutador confirma haberla realizado.
+3.2 Gateway de Pagos
+La integración con el proveedor de pagos externo es asíncrona. SOFI actúa como orquestador: recibe la solicitud de pago del reclutador, la reenvía al gateway y espera la confirmación mediante webhook o polling.
+Los métodos de pago soportados son: tarjeta (requiere token tokenizado del proveedor, compatible con flujos 3DS), transferencia bancaria y crédito_sofi (saldo interno). El campo desglose en la colección pagos permite auditar el monto cobrado por cada portal individual.
+Códigos de error específicos de la integración: ERR_PAYMENT_DECLINED (HTTP 402) cuando el gateway rechaza la transacción, y ERR_PAYMENT_GATEWAY (HTTP 503) cuando el servicio externo no está disponible. En ambos casos el sistema registra el error y permite reintentar sin crear un duplicado de pago.
+3.3 Servicio de IA Generativa
+El endpoint POST /perfiles/ia/generar actúa como proxy hacia el servicio de IA interno o externo de SOFI. Este servicio recibe el contexto de la vacante y genera contenido profesional para el anuncio de empleo.
+El servicio retorna una propuesta completa no persistida: titulo_anuncio, descripcion, requisitos, beneficios, tipo_jornada sugerido, ia_chips identificadas y un array de sugerencias adicionales. El usuario puede editar el resultado antes de guardar con POST /perfiles. La bandera generado_por_ia queda registrada en el perfil para trazabilidad.
+Si el servicio no está disponible, retorna ERR_IA_UNAVAILABLE (HTTP 503), permitiendo al reclutador continuar el flujo con creación manual del perfil.
+4. Consideraciones Técnicas Fundamentales
+4.1 Autenticación y Seguridad
+Todos los endpoints (excepto los de autenticación) requieren un Bearer JWT válido. La arquitectura de seguridad implementa los siguientes mecanismos:
+JWT de acceso con expiración de 8 horas y refresh token con vida de 30 días almacenado en cookie httpOnly.
+Control de acceso basado en roles: admin, reclutador y viewer con permisos diferenciados por recurso y empresa.
+Protección contra fuerza bruta: bloqueo temporal de 15 minutos tras intentos de login fallidos reiterados (ERR_TOO_MANY_ATTEMPTS, HTTP 429).
+API keys de portales externos almacenadas exclusivamente mediante referencias a secrets en vault; nunca en base de datos ni código fuente.
+Tokens de tarjeta tokenizados por el proveedor de pagos; SOFI nunca manipula datos de tarjeta en texto plano (PCI-DSS compliance).
+4.2 Modelo de Datos MongoDB
+El diseño del modelo de datos prioriza la consistencia referencial mediante ObjectIds y la eficiencia de consulta mediante índices estratégicos. Consideraciones clave:
+Auto-incremento de código en vacantes: implementar con operación atómica findAndModify sobre un contador dedicado para garantizar unicidad bajo concurrencia.
+Desnormalización controlada: nombre_portal en subdocumento publicacion_portal se almacena redundantemente para evitar joins costosos en consultas frecuentes de estado.
+TTL index: el índice { estado: 1, fecha_expiracion: 1 } en publicaciones_campana es compatible con jobs de expiración automática de campañas.
+Índice de texto: { nombre: 'text', descripcion: 'text' } en vacantes debe crearse en horario de bajo tráfico. Evaluar Atlas Search para entornos de alta concurrencia.
+Índices únicos críticos: email en usuarios, codigo en vacantes, slug en portales y categorias, campana_id en pagos.
+4.3 Gestión de Estados y Transiciones
+El sistema implementa máquinas de estado explícitas para vacantes, campañas y pagos. Las transiciones inválidas retornan ERR_INVALID_STATE (HTTP 409). Reglas fundamentales:
+4.4 Procesamiento Asíncrono
+Las publicaciones en portales externos y el procesamiento de pagos son operaciones asíncronas. El sistema debe implementar:
+Worker/queue para procesar publicaciones en portales con API: enviar el anuncio, esperar confirmación y actualizar el estado del subdocumento publicacion_portal.
+Manejo de reintentos con backoff exponencial: los campos intentos y ultimo_intento en publicacion_portal soportan esta lógica. Definir máximo de reintentos por portal.
+Webhook receiver para confirmaciones del gateway de pagos: debe validar la firma del payload antes de actualizar el estado del pago y desencadenar las publicaciones pendientes.
+Jobs de expiración automática: basados en el índice { estado, fecha_expiracion } para cerrar campañas vencidas.
+4.5 Manejo de Errores y Códigos HTTP
+La API implementa un catálogo estandarizado de 30+ códigos de error internos que garantizan respuestas consistentes y manejables por el cliente. Principios clave:
+Todos los errores siguen la estructura: { success: false, error: { code, message, details } }.
+El campo details en ERR_VALIDATION contiene un array de { field, message } para validación campo a campo.
+Los errores de servicio externo (ERR_IA_UNAVAILABLE, ERR_PAYMENT_GATEWAY) retornan HTTP 503 indicando reintento.
+ERR_INTERNAL (HTTP 500) incluye trace_id para correlación con los logs del servidor.
+HTTP 202 (Accepted) para operaciones asíncronas (inicio de pago) diferencia procesamiento en curso de éxito inmediato.
+4.6 Paginación y Rendimiento
+Todos los endpoints de listado implementan paginación estándar con los parámetros page (base 1) y limit (máximo 100). La respuesta siempre incluye meta.total, meta.page, meta.limit y meta.pages. Consideraciones de rendimiento:
+Los índices compuestos (empresa_id + estado, activo + paises + modelo_empresa) están diseñados para los filtros de consulta más frecuentes.
+El índice { veces_usado: -1 } en perfiles_cargo permite ordenar eficientemente por popularidad sin sort en memoria.
+El índice { createdAt: -1 } en pagos optimiza las consultas de historial más recientes primero.
+Las búsquedas de texto libre en vacantes usan el índice de texto de MongoDB; para alta concurrencia, migrar a Atlas Search o Elasticsearch.
+4.7 Cobertura Geográfica y Multimoneda
+El sistema está diseñado para operar en múltiples países latinoamericanos (MX, GT, HN, SV, NI, US). Esto implica:
+Códigos de país en formato ISO 3166-1 alpha-2 en todos los documentos relevantes (empresas, portales, campañas).
+Monedas en formato ISO 4217 (MXN, GTQ, HNL, USD, etc.) con validación en API (ERR_INVALID_MONEDA).
+Cada portal puede tener su propia moneda (moneda_portal en publicacion_portal); la campaña consolida el costo_total en una moneda unificada.
+El desglose en pagos registra el monto de cada portal en su moneda original para auditoría y conciliación contable.
+5. Resumen de Endpoints
+La siguiente tabla consolida todos los endpoints del sistema para referencia rápida del equipo de desarrollo.
+Autenticación
+Vacantes
+Perfiles de Cargo
+Portales
+Campañas
+Pagos
+— Fin del Informe —
+Confidencial · SOFI · Armstrong Reclutamiento · Versión 1.0 · Febrero 2026
+
+
+--- Extracting c:\Users\nikolas\Desktop\sofi\sofi-app-20260501T183203Z-3-001\sofi-app\docs-extracted\Docs. Reunión Jueves 30-04\Modelo_Datos_Sofi_Publ.xlsx ---
+Sheet: Resumen Relaciones
+Entidad Origen | Entidad Destino | Relación | Clave Foránea (FK) | Descripción
+Clientes | Usuarios | 1:N | client_id | Un cliente tiene múltiples usuarios.
+Clientes | Vacantes | 1:N | client_id | Las vacantes pertenecen a un cliente (Tenant).
+Clientes | Portales | 1:N | client_id | Configuraciones de portales por cliente.
+Usuarios | Tokens de Refresco | 1:N | user_id | Sesiones activas por usuario.
+Usuarios | Vacantes | 1:N | created_by | Rastreo de quién creó la vacante.
+Vacantes | Perfiles Cargo | 1:N | vacante_id | Detalles técnicos de la vacante.
+Vacantes | Campañas | 1:N | vacante_id | Intentos de publicación de una vacante.
+Campañas | Campañas Portales | 1:N | campana_id | Estado de la campaña en cada portal.
+Portales | Campañas Portales | 1:N | portal_id | Vínculo con el catálogo de portales.
+Campañas Portales | Pagos | 1:N | campana_portal_id | Transacciones para portales de pago.
+Usuarios | Logs de Actividades | 1:N | user_id | Auditoría de acciones de usuario.
+Clientes | Logs de Actividades | 1:N | client_id | Auditoría a nivel de Tenant.
+Sheet: Clientes
+Campo | Tipo | Restricciones | Descripción
+id | uuid | PK | Identificador único del cliente
+name | varchar(120) | NN | Razón social de la empresa
+plan | varchar(40) | NN | free | starter | pro | enterprise
+feature_flags | jsonb |  | Flags de funcionalidades habilitadas
+timezone | varchar(60) | NN | Zona horaria por defecto
+locale | varchar(10) | NN | Idioma del tenant: es | en
+activo | boolean | NN | Si el tenant está activo
+created_at | timestamptz | NNIDX | Fecha de creación
+Sheet: Usuarios
+Campo | Tipo | Restricciones | Descripción
+id | uuid | PK | Identificador único del usuario
+client_id | uuid | FKNNIDX | Tenant al que pertenece → CLIENTS.id
+email | varchar(200) | NNUK | Email único dentro del tenant
+name | varchar(120) | NN | Nombre completo
+role | varchar(40) | NN | admin | recruiter | viewer
+permissions | text[] |  | Permisos granulares adicionales
+last_login_at | timestamptz |  | Último acceso registrado
+activo | boolean | NN | Si la cuenta está activa
+created_at | timestamptz | NN | Fecha de creación
+Sheet: Tokens de Refresco
+Campo | Tipo | Restricciones | Descripción
+id | uuid | PK | Identificador del token
+user_id | uuid | FKNNIDX | Usuario dueño → USERS.id
+token_hash | varchar(255) | NNUK | Hash SHA-256 del refresh token
+expires_at | timestamptz | NN | Fecha de vencimiento
+revocado | boolean | NN | Si fue revocado explícitamente
+ip_origen | inet |  | IP desde donde se generó
+created_at | timestamptz | NN | Fecha de emisión
+Sheet: Vacantes
+Campo | Tipo | Restricciones | Descripción
+id | uuid | PK | Identificador único
+client_id | uuid | FKNNIDX | Tenant propietario → CLIENTS.id
+created_by | uuid | FKNN | Creador → USERS.id
+codigo | varchar(40) | UKIDX | Código único (ej. VAC-2025-001)
+titulo | varchar(200) | NN | Título del cargo
+descripcion | text |  | Descripción completa
+requisitos | text |  | Requisitos técnicos
+modalidad | varchar(30) |  | presencial | remoto | híbrido
+estado | varchar(30) | NNIDX | borrador | en_proceso | listo | publicado | cerrado
+esta_listo | boolean | NN | Flag del flujo '¿está listo?'
+created_at | timestamptz | NN | Fecha de creación
+updated_at | timestamptz | NN | Última modificación
+Sheet: Perfiles Cargo
+Campo | Tipo | Restricciones | Descripción
+id | uuid | PK | ID del perfil
+vacante_id | uuid | FKNNIDX | Vacante → VACANTES.id
+client_id | uuid | FKNN | Tenant → CLIENTS.id
+nombre | varchar(160) | NN | Nombre del perfil
+descripcion | text |  | Descripción detallada
+competencias | text[] |  | Lista de competencias
+generado_por_ia | boolean | NN | True si fue generado por IA
+prompt_usado | text |  | Prompt enviado a la IA (trazabilidad)
+created_at | timestamptz | NN | Fecha de creación
+Sheet: Portales
+Campo | Tipo | Restricciones | Descripción
+id | uuid | PK | ID del portal
+client_id | uuid | FKNNIDX | Tenant → CLIENTS.id
+nombre | varchar(100) | NN | LinkedIn, Laborum, etc.
+url_base | varchar(300) | NN | URL raíz del portal
+tipo | varchar(30) | NN | web | whatsapp | api_oficial
+es_pago | boolean | NN | ¿Requiere pago para publicar?
+activo | boolean | NNIDX | Habilitado en el catálogo
+agente_tipo | varchar(60) | NN | PlaywrightAgent | WhatsAppAgent | ApiAgent
+config_agente | jsonb |  | Credenciales y selectores (cifrado)
+created_at | timestamptz | NN | Fecha de registro
+updated_at | timestamptz | NN | Última actualización
+Sheet: Campañas
+Campo | Tipo | Restricciones | Descripción
+id | uuid | PK | ID de campaña
+vacante_id | uuid | FKNNIDX | Vacante → VACANTES.id
+client_id | uuid | FKNNIDX | Tenant → CLIENTS.id
+created_by | uuid | FKNN | Lanzado por → USERS.id
+estado | varchar(30) | NNIDX | borrador | activa | pausada | completada
+portales_seleccionados | uuid[] |  | IDs de portales elegidos
+fecha_inicio | timestamptz |  | Inicio programado
+fecha_fin | timestamptz |  | Fin de vigencia
+created_at | timestamptz | NN | Fecha de creación
+updated_at | timestamptz | NN | Última modificación
+Sheet: Campañas Portales
+Campo | Tipo | Restricciones | Descripción
+id | uuid | PK | ID del registro
+campana_id | uuid | FKNNIDX | Campaña → CAMPANAS.id
+portal_id | uuid | FKNNIDX | Portal → PORTALES.id
+estado | varchar(30) | NNIDX | pendiente | publicado | error
+url_publicada | varchar(500) |  | URL resultante
+intentos | integer | NN | Número de reintentos
+mensaje_error | text |  | Detalle del error
+agente_log | jsonb |  | Log de acciones del agente
+publicado_at | timestamptz |  | Timestamp de éxito
+updated_at | timestamptz | NN | Última actualización
+Sheet: Pagos
+Campo | Tipo | Restricciones | Descripción
+id | uuid | PK | ID del pago
+campana_portal_id | uuid | FKNNIDX | Publicación → CAMPANA_PORTALES.id
+client_id | uuid | FKNN | Tenant → CLIENTS.id
+monto | numeric(12,2) | NN | Monto
+moneda | char(3) | NN | ISO 4217 (CLP, USD…)
+estado | varchar(30) | NNIDX | pendiente | completado | fallido
+metodo_pago | varchar(40) |  | tarjeta | webpay | stripe
+referencia_externa | varchar(200) |  | ID Gateway
+metadata_pago | jsonb |  | Auditoría del gateway
+created_at | timestamptz | NN | Inicio de pago
+updated_at | timestamptz | NN | Última actualización
+Sheet: Logs de Actividades
+Campo | Tipo | Restricciones | Descripción
+id | uuid | PK | ID del log
+client_id | uuid | FKNNIDX | Tenant → CLIENTS.id
+user_id | uuid | FKIDX | Usuario (null si IA)
+accion | varchar(80) | NNIDX | Ej: vacante.create
+entidad | varchar(60) | NN | Tabla afectada
+entidad_id | uuid |  | ID afectado
+resultado | varchar(20) | NN | success | error
+ip_origen | inet |  | IP del cliente
+user_agent | text |  | User-agent
+metadata | jsonb |  | Payload: before/after
+created_at | timestamptz | NNIDX | Timestamp exacto
+
+
+--- Extracting c:\Users\nikolas\Desktop\sofi\sofi-app-20260501T183203Z-3-001\sofi-app\docs-extracted\Docs. Reunión Jueves 30-04\Modelo_NoSQL_Sofi_Publ.xlsx ---
+Sheet: Estrategia NoSQL
+Colección | Estrategia de Datos | Relaciones Anidadas (Embedded) | Motivación
+Clients | Documento Raíz | config_portales[] | Velocidad: Las credenciales se leen junto al cliente.
+Users | Documento Raíz | refresh_tokens[], permissions[] | Seguridad: Todo el contexto de sesión en un solo fetch.
+Vacancies | Documento Raíz | profiles[], campaigns[] | Atomicidad: Una vacante contiene toda su historia de publicación.
+Logs | Time-series / Flat | N/A | Escalabilidad: Documentos pequeños para escritura rápida de auditoría.
+Sheet: Collection Clients
+Campo (Key) | Tipo | Descripción
+_id | ObjectId | ID único del tenant
+name | String | Nombre de la empresa
+plan | String | free | starter | pro
+config_portales | Array<Object> | Lista de portales habilitados
+config_portales.portal_id | ObjectId | Referencia al catálogo
+config_portales.credentials | Object (Encrypted) | Usuario, pass, tokens del portal
+settings | Object | Timezone, locale, etc.
+active | Boolean | Estado del cliente
+Sheet: Collection Users
+Campo (Key) | Tipo | Descripción
+_id | ObjectId | ID del usuario
+client_id | ObjectId | Referencia al Client
+email | String | Email único
+role | String | admin | recruiter
+refresh_tokens | Array<Object> | Tokens de sesión activos
+refresh_tokens.token_hash | String | Hash del token
+refresh_tokens.expires_at | Date | Vencimiento
+permissions | Array<String> | Lista de permisos (can_publish, etc.)
+Sheet: Collection Vacancies
+Campo (Key) | Tipo | Descripción
+_id | ObjectId | ID de la vacante
+client_id | ObjectId | ID del dueño
+content | Object | titulo, descripcion, requisitos, modalidad
+status | String | draft | ready | published
+profiles | Array<Object> | Sub-documentos de perfiles (IA)
+profiles.name | String | Nombre del perfil
+profiles.ia_metadata | Object | Prompt y parámetros usados por la IA
+campaigns | Array<Object> | Historial de intentos de publicación
+campaigns.status | String | active | completed
+campaigns.portals | Array<Object> | Estado por portal individual
+campaigns.portals.name | String | Nombre (LinkedIn, etc.)
+campaigns.portals.result_url | String | Link de la vacante
+campaigns.portals.agent_logs | Array<String> | Pasos ejecutados por el agente
+Sheet: Collection AuditLogs
+Campo (Key) | Tipo | Descripción
+_id | ObjectId | ID del log
+timestamp | Date | Fecha y hora
+actor | Object | id, type (user|agent), email
+action | String | vacante.create, etc.
+payload | Object | Datos antes y después del cambio (diff)
+metadata | Object | IP, User-Agent, etc.
+
+
+--- Extracting c:\Users\nikolas\Desktop\sofi\sofi-app-20260501T183203Z-3-001\sofi-app\docs-extracted\Docs. Reunión Jueves 30-04\Plan de Trabajo.pdf ---
+Page 1:
+Plan  de  Trabajo  —  Módulo  Sofi-Publ    |     Gestión  de  Proyectos  Informáticos  —  Alloxentric
+ 
+ 
+ 
+PLAN  DE  TRABAJO 
+Módulo  Sofi-Publ 
+Automatización  Inteligente  de  Publicación  de  Vacantes  en  Portales  de  
+Empleo
+ 
+ 
+ 
+ 
+ 
+Asignatura:  Gestión  de  Proyectos  Informáticos  Empresa:  Alloxentric  IA  Sistema:  Sofi  —  Bot  WhatsApp  para  Reclutamiento  Período  de  ejecución:  28  de  abril  —  13  de  julio  de  2026    
+Página  1  de  13
+ 
+Page 2:
+Plan  de  Trabajo  —  Módulo  Sofi-Publ    |     Gestión  de  Proyectos  Informáticos  —  Alloxentric
+ 
+1.  Propósito  y  Alcance  del  Plan  de  Trabajo  
+Este  documento  define  el  Plan  de  Trabajo  oficial  del  módulo  Sofi-Publ,  desarrollado  como  proyecto  
+universitario
+ 
+para
+ 
+la
+ 
+asignatura
+ 
+Gestión
+ 
+de
+ 
+Proyectos
+ 
+Informáticos,
+ 
+en
+ 
+el
+ 
+marco
+ 
+del
+ 
+encargo
+ 
+de
+ 
+Alloxentric
+ 
+IA.
+ 
+El
+ 
+plan
+ 
+articula
+ 
+de
+ 
+manera
+ 
+integral
+ 
+el
+ 
+contexto
+ 
+del
+ 
+problema,
+ 
+los
+ 
+objetivos,
+ 
+la
+ 
+metodología
+ 
+de
+ 
+trabajo,
+ 
+el
+ 
+equipo,
+ 
+los
+ 
+entregables,
+ 
+los
+ 
+riesgos
+ 
+y
+ 
+el
+ 
+cronograma
+ 
+de
+ 
+ejecución.
+  Sofi-Publ  es  un  módulo  de  automatización  inteligente  que  extiende  las  capacidades  del  bot  de  
+WhatsApp
+ 
+Sofi
+ 
+—plataforma
+ 
+existente
+ 
+de
+ 
+Alloxentric
+ 
+para
+ 
+la
+ 
+gestión
+ 
+de
+ 
+reclutamiento—
+ 
+añadiendo
+ 
+la
+ 
+capacidad
+ 
+de
+ 
+publicar
+ 
+vacantes
+ 
+de
+ 
+forma
+ 
+automática
+ 
+y
+ 
+simultánea
+ 
+en
+ 
+múltiples
+ 
+portales
+ 
+de
+ 
+empleo
+ 
+y
+ 
+canales
+ 
+digitales
+ 
+a
+ 
+través
+ 
+de
+ 
+un
+ 
+sistema
+ 
+de
+ 
+agentes
+ 
+especializados.
+  
+1.1  Problema  de  Negocio  El  proceso  actual  de  publicación  de  vacantes  en  la  empresa  cliente  de  Alloxentric  es  manual,  
+repetitivo
+ 
+y
+ 
+lento.
+ 
+Cada
+ 
+vez
+ 
+que
+ 
+un
+ 
+reclutador
+ 
+crea
+ 
+una
+ 
+nueva
+ 
+vacante
+ 
+en
+ 
+Sofi,
+ 
+debe
+ 
+luego
+ 
+acceder
+ 
+a
+ 
+cada
+ 
+portal
+ 
+de
+ 
+empleo
+ 
+(LinkedIn,
+ 
+Laborum,
+ 
+Trabajando.com,
+ 
+Get
+ 
+on
+ 
+Board,
+ 
+grupos
+ 
+de
+ 
+WhatsApp,
+ 
+etc.)
+ 
+e
+ 
+ingresar
+ 
+manualmente
+ 
+la
+ 
+información.
+ 
+Este
+ 
+proceso:
+  •  Consume  entre  30  y  90  minutos  por  vacante  publicada  en  múltiples  portales.  •  Genera  errores  e  inconsistencias  en  la  información  publicada  entre  plataformas.  •  Impide  la  trazabilidad  centralizada  del  estado  de  cada  publicación.  •  Satura  la  carga  operativa  de  los  reclutadores,  limitando  su  foco  en  actividades  de  mayor  
+valor.
+  
+1.2  Solución  Propuesta  Sofi-Publ  automatiza  completamente  el  ciclo  de  publicación.  Al  momento  de  crear  una  vacante  en  
+Sofi,
+ 
+el
+ 
+módulo
+ 
+orquesta
+ 
+agentes
+ 
+de
+ 
+IA
+ 
+especializados
+ 
+que
+ 
+navegan,
+ 
+acceden
+ 
+y
+ 
+publican
+ 
+en
+ 
+cada
+ 
+portal
+ 
+configurado,
+ 
+notifican
+ 
+al
+ 
+reclutador
+ 
+vía
+ 
+WhatsApp
+ 
+y
+ 
+registran
+ 
+el
+ 
+estado
+ 
+de
+ 
+cada
+ 
+publicación
+ 
+en
+ 
+un
+ 
+panel
+ 
+centralizado
+ 
+de
+ 
+administración.
+  
+2.  Objetivos  del  Proyecto  
+2.1  Objetivo  General  Diseñar,  implementar  y  documentar  el  módulo  Sofi-Publ,  una  solución  de  automatización  
+inteligente
+ 
+basada
+ 
+en
+ 
+agentes
+ 
+de
+ 
+IA
+ 
+que
+ 
+permita
+ 
+la
+ 
+publicación
+ 
+automática
+ 
+y
+ 
+simultánea
+ 
+de
+ 
+vacantes
+ 
+en
+ 
+múltiples
+ 
+portales
+ 
+de
+ 
+empleo
+ 
+y
+ 
+canales
+ 
+digitales,
+ 
+integrándose
+ 
+de
+ 
+forma
+ 
+nativa
+ 
+con
+ 
+el
+ 
+bot
+ 
+Sofi
+ 
+existente
+ 
+de
+ 
+Alloxentric.
+  
+2.2  Objetivos  Específicos   
+OE1 
+Análisis  y  Requerimientos Levantar  y  documentar  los  requerimientos  funcionales  y  no  funcionales  del  módulo,  incluyendo  catálogo  de  portales,  agentes  especializados,  interfaz  de  administración  e  integración  con  Sofi.   
+Página  2  de  13
+ 
+Page 3:
+Plan  de  Trabajo  —  Módulo  Sofi-Publ    |     Gestión  de  Proyectos  Informáticos  —  Alloxentric
+ 
+OE2 
+Diseño  de  Arquitectura Diseñar  la  arquitectura  multi-agente  del  módulo  (agente  orquestador  +  agentes  especializados  por  portal),  el  modelo  de  datos  del  catálogo  y  los  flujos  de  publicación,  cumpliendo  los  estándares  de  Alloxentric  (multi-tenancy,  RBAC,  API-First,  auditoría  de  logs).   
+OE3 
+Implementación Desarrollar  el  agente  base  reutilizable,  los  agentes  especializados  por  portal  (web  y  WhatsApp),  la  interfaz  de  administración  del  catálogo  y  la  integración  con  el  flujo  de  creación  de  vacantes  en  Sofi.   
+OE4 
+Validación  y  Pruebas Ejecutar  pruebas  funcionales,  de  integración  y  SQA  del  sistema  completo,  validando  el  flujo  extremo  a  extremo  (creación  de  vacante  →  publicación  en  todos  los  canales  →  notificación  al  reclutador).   
+OE5 
+Análisis  de  Impacto Cuantificar  la  reducción  de  carga  operativa  lograda  con  la  automatización  vs.  el  proceso  manual,  documentando  métricas  de  desempeño  y  tiempos  de  publicación.   
+OE6 
+Documentación  y  Transferencia Completar  la  documentación  técnica  (informe  final,  artículo  técnico  IMRAD,  manual  de  deployment,  manual  de  usuario  y  repositorio  GitHub)  para  la  transferencia  tecnológica  a  Alloxentric.   
+3.  Equipo  de  Proyecto  y  Roles  
+El  proyecto  se  gestiona  bajo  metodología  Scrum,  con  sprints  semanales  y  reuniones  de  grupo  
+periódicas.
+ 
+Los
+ 
+roles
+ 
+del
+ 
+equipo
+ 
+están
+ 
+diferenciados
+ 
+por
+ 
+responsabilidad
+ 
+técnica
+ 
+y
+ 
+de
+ 
+gestión,
+ 
+alineados
+ 
+con
+ 
+los
+ 
+estándares
+ 
+de
+ 
+Alloxentric.
+  Rol Responsable Responsabilidades  Clave 
+Product  Owner  (Universidad)  
+Docente  Supervisor  
+Validación  de  hitos  académicos,  revisión  de  informes  de  avance  y  defensa  final.  
+Product  Owner  (Empresa)  Alloxentric  IA  
+Priorización  del  backlog,  validación  de  requerimientos  y  retroalimentación  técnica  en  cada  avance.  
+Scrum  Master  
+Integrante  Asignado  
+Gestión  de  sprints,  seguimiento  de  tareas,  coordinación  de  reuniones  grupales  y  resolución  de  impedimentos.  
+Arquitecto  /  Líder  Técnico  
+Integrante  Asignado  
+Definición  de  la  arquitectura,  diseño  de  agentes,  toma  de  decisiones  tecnológicas.  
+Desarrollador  Backend  
+Integrante(s)  Asignado(s)  
+Implementación  de  agentes,  integración  con  Sofi,  modelo  de  datos  y  APIs.  
+Desarrollador  Frontend  
+Integrante  Asignado  
+Implementación  de  la  interfaz  de  administración  del  catálogo  de  portales.  
+Página  3  de  13
+ 
+Page 4:
+Plan  de  Trabajo  —  Módulo  Sofi-Publ    |     Gestión  de  Proyectos  Informáticos  —  Alloxentric
+ 
+Tester  /  QA  
+Integrante  Asignado  
+Diseño  y  ejecución  de  pruebas  funcionales,  de  integración  y  SQA.  
+Documentador  Técnico  Todo  el  equipo  
+Elaboración  de  informes,  artículo  técnico,  manual  de  deployment  y  de  usuario.   Nota:  dado  el  carácter  universitario  del  proyecto,  un  mismo  integrante  puede  asumir  más  de  un  rol.  La  
+distribución
+ 
+definitiva
+ 
+de
+ 
+roles
+ 
+se
+ 
+formaliza
+ 
+en
+ 
+el
+ 
+Plan
+ 
+Scrum
+ 
+del
+ 
+equipo.  
+4.  Metodología  de  Desarrollo  
+4.1  Marco  Ágil  Scrum  El  proyecto  adopta  Scrum  como  metodología  de  desarrollo.  Los  sprints  tienen  duración  semanal  y  
+están
+ 
+sincronizados
+ 
+con
+ 
+los
+ 
+hitos
+ 
+académicos
+ 
+definidos
+ 
+en
+ 
+el
+ 
+cronograma
+ 
+universitario.
+ 
+Cada
+ 
+sprint
+ 
+incluye
+ 
+las
+ 
+ceremonias
+ 
+mínimas
+ 
+de
+ 
+Scrum:
+ 
+Planning,
+ 
+Daily
+ 
+(adaptado
+ 
+a
+ 
+reuniones
+ 
+de
+ 
+grupo),
+ 
+Review
+ 
+y
+ 
+Retrospectiva.
+  
+4.2  Estándares  Técnicos  de  Alloxentric  Todo  el  desarrollo  debe  adherirse  a  los  estándares  técnicos  transversales  establecidos  por  
+Alloxentric:
+  
+Multi-Tenancy 
+Aislamiento  lógico  de  datos  por  cliente  (client_id)  en  base  de  datos  y  APIs.  El  catálogo  de  portales  de  Sofi-Publ  es  particionado  por  empresa  cliente.   
+Feature  Gating 
+Las  funcionalidades  del  módulo  estarán  protegidas  por  feature_flags  vinculados  al  perfil  comercial  del  cliente.  El  frontend  reacciona  dinámicamente  al  perfil  comercial  obtenido  en  autenticación.   
+RBAC  Granular 
+Control  de  acceso  basado  en  roles  dentro  de  cada  organización  cliente.  Los  tokens  JWT  transportan  claims  de  permisos  para  decisiones  de  autorización  en  backend  y  frontend.   
+API-First 
+Toda  interacción  con  el  módulo  (registro  de  portales,  activación  de  agentes,  consulta  de  estado  de  publicaciones)  se  expone  a  través  de  endpoints  REST  documentados.   
+Auditoría  de  Logs 
+Cada  acción  del  sistema  (publicación  exitosa,  falla,  activación/desactivación  de  portal)  genera  un  log  estructurado  con  las  5  dimensiones:  Quién,  Qué,  Cuándo,  Desde  dónde  y  Resultado.   
+i18n  y  Accesibilidad 
+La  interfaz  de  administración  debe  soportar  internacionalización  (ES/EN  mínimo)  y  cumplir  estándares  de  accesibilidad  visual  incluyendo  soporte  de  tema  claro/oscuro.   
+Página  4  de  13
+ 
+Page 5:
+Plan  de  Trabajo  —  Módulo  Sofi-Publ    |     Gestión  de  Proyectos  Informáticos  —  Alloxentric
+ 
+5.  Arquitectura  del  Módulo  
+5.1  Visión  General  Sofi-Publ  se  integra  como  módulo  dentro  del  ecosistema  Sofi.  Su  arquitectura  central  es  un  
+sistema
+ 
+multi-agente
+ 
+compuesto
+ 
+por
+ 
+un
+ 
+Agente
+ 
+Orquestador
+ 
+principal
+ 
+y
+ 
+múltiples
+ 
+Agentes
+ 
+Especializados
+ 
+por
+ 
+portal,
+ 
+coordinados
+ 
+bajo
+ 
+un
+ 
+Catálogo
+ 
+de
+ 
+Portales
+ 
+configurable.
+  
+5.2  Componentes  Principales   Componente Tipo Descripción 
+Agente  Orquestador  IA  /  Backend 
+Recibe  el  evento  de  creación  de  vacante  desde  Sofi,  consulta  el  catálogo  de  portales  habilitados  y  delega  la  tarea  de  publicación  a  cada  agente  especializado.  
+Agente  Base  Reutilizable  
+IA  /  Backend 
+Clase/módulo  base  que  define  la  interfaz  y  comportamiento  común  de  todos  los  agentes  de  publicación  (métodos:  conectar,  publicar,  verificar,  notificar).  
+Agente  Portal  Web  (N)  IA  /  Backend 
+Implementación  específica  para  cada  portal  web  (Laborum,  Trabajando.com,  Get  on  Board,  etc.).  Hereda  del  agente  base  y  especializa  la  lógica  de  navegación  y  publicación.  
+Agente  WhatsApp  Groups  
+IA  /  Backend 
+Especialización  del  agente  base  para  publicación  en  grupos  de  WhatsApp.  Se  integra  con  la  infraestructura  existente  del  bot  Sofi.  
+Catálogo  de  Portales  Backend  /  BD 
+Modelo  de  datos  que  registra  portales  disponibles,  sus  configuraciones  (credenciales,  esquemas  de  publicación,  estado  habilitado/deshabilitado)  y  el  agente  asignado.  
+Interfaz  de  Administración  
+Frontend 
+Panel  web  para  que  el  reclutador  gestione  el  catálogo  (agregar,  editar,  habilitar/deshabilitar  portales),  consulte  el  estado  de  publicaciones  e  historial.  
+Panel  de  Estado  Frontend 
+Vista  en  tiempo  real  del  estado  de  publicación  de  cada  vacante  en  cada  portal  (publicada,  pendiente,  error).  
+Log  de  Actividad  Backend  /  BD 
+Registro  auditable  de  todas  las  operaciones  del  módulo  según  estándar  de  Alloxentric  (Quién,  Qué,  Cuándo,  Desde  dónde,  Resultado).  
+Notificador  WhatsApp  
+Backend  /  Integración 
+Envía  notificación  al  reclutador  vía  WhatsApp  al  completarse  la  publicación  automática  de  una  vacante  en  todos  los  canales  configurados.   
+5.3  Stack  Tecnológico  (A  definir  en  Sprint  1)  La  selección  definitiva  del  stack  se  realiza  durante  la  actividad  2.3.3  del  cronograma  (19-20  de  
+abril).
+ 
+Los
+ 
+candidatos
+ 
+evaluados
+ 
+incluyen:
+  Capa Opciones  Candidatas Criterio  de  Selección 
+Página  5  de  13
+ 
+Page 6:
+Plan  de  Trabajo  —  Módulo  Sofi-Publ    |     Gestión  de  Proyectos  Informáticos  —  Alloxentric
+ 
+Backend  /  Agentes  
+Python  (LangChain  /  AutoGen),  Node.js  
+Compatibilidad  con  Sofi  existente,  madurez  de  frameworks  de  agentes  IA  
+Base  de  Datos  PostgreSQL,  MongoDB  
+Soporte  multi-tenancy,  consultas  estructuradas  de  catálogo  
+Frontend  Admin  React,  Vue.js  
+Velocidad  de  prototipado,  componentes  reutilizables  Orquestación  /  APIs  REST  (FastAPI  /  Express)  Estándar  API-First  de  Alloxentric  
+Automatización  Web  Playwright,  Selenium,  Puppeteer  
+Capacidad  de  navegación  headless  en  portales  de  empleo  
+Control  de  Versiones  Git  +  GitHub  (repositorio  privado)  
+Estándar  del  equipo  y  requisito  de  entregable  final    
+Página  6  de  13
+ 
+Page 7:
+Plan  de  Trabajo  —  Módulo  Sofi-Publ    |     Gestión  de  Proyectos  Informáticos  —  Alloxentric
+ 
+6.  Fases  del  Plan  de  Trabajo  
+El  plan  de  trabajo  se  estructura  en  6  fases,  alineadas  con  el  cronograma  académico  y  los  hitos  de  
+entrega
+ 
+definidos
+ 
+para
+ 
+la
+ 
+asignatura.
+ 
+Cada
+ 
+fase
+ 
+tiene
+ 
+objetivos
+ 
+concretos,
+ 
+actividades
+ 
+clave
+ 
+y
+ 
+entregables
+ 
+verificables.
+  FASE  1  —  Diseño  Metodológico  y  Levantamiento  de  Requerimientos   |   28  marzo  –  27  abril  2026  Actividades  Clave Entregables 
+•  Definición  de  req.  funcionales  del  catálogo  de  portales  (2.2.1)  •  Definición  de  req.  funcionales  del  agente  especializado  por  portal  (2.2.2)  •  Estrategia  de  publicación  automática  por  tipo  de  canal  (2.2.3)  •  Requerimientos  de  integración  con  bot  WhatsApp  existente  (2.2.5)  •  Requerimientos  de  interfaz  de  administración  del  catálogo  (2.2.6)  •  Análisis  del  flujo  actual  de  creación  de  vacante  en  Sofi  (2.2.7)  •  Definición  de  casos  de  uso  principales  del  módulo  (2.2.8)  •  Priorización  y  validación  de  reqs.  con  Alloxentric  (2.2.9)  •  Identificación  de  portales  prioritarios  (2.3.1)  •  Estrategia  de  diseño  del  agente  orquestador  (2.3.2)  •  Selección  del  stack  tecnológico  (2.3.3)  •  Protocolo  de  acceso  a  APIs  de  portales  externos  (2.3.5)  •  Configuración  entorno  de  desarrollo:  Git,  repo,  ambientes  (2.3.6)  •  Documento  de  arquitectura  preliminar  (2.3.7)  •  Elaboración  Informe  de  Avance  N°1  (2.4)  
+•  ✅  Documento  de  requerimientos  funcionales  y  no  funcionales  •  ✅  Casos  de  uso  principales  del  módulo  Sofi-Publ  •  ✅  Backlog  priorizado  del  proyecto  •  ✅  Documento  de  arquitectura  preliminar  •  ✅  Stack  tecnológico  seleccionado  y  justificado  •  ✅  Repositorio  Git  configurado  con  estructura  de  proyecto  •  ✅  Protocolo  de  acceso  a  APIs  de  portales  externos  •  ✅  Informe  de  Avance  N°1  (entrega:  27  de  abril)  •  🎯  HITO:  Entrega  Avance  N°1  y  Defensa  —  27  Abr  2026 
+  FASE  2  —  Diseño  del  Sistema  y  Prototipado   |   28  abril  –  25  mayo  2026  Actividades  Clave Entregables 
+•  Acceso  al  repositorio  Sofi  y  análisis  del  código  base  del  bot  WhatsApp  (3.1.1)  •  Diseño  del  modelo  de  datos  del  catálogo  (portales,  agentes,  configs)  (3.2.1)  
+•  ✅  Modelo  de  datos  del  catálogo  de  portales  (ERD)  •  ✅  Flujo  de  registro  y  habilitación  de  portales  
+Página  7  de  13
+ 
+Page 8:
+Plan  de  Trabajo  —  Módulo  Sofi-Publ    |     Gestión  de  Proyectos  Informáticos  —  Alloxentric
+ 
+•  Diseño  del  flujo  de  registro  y  habilitación  de  un  nuevo  portal  (3.2.2)  •  Diseño  del  esquema  de  configuración  parametrizable  por  agente  (3.2.3)  •  Diseño  del  agente  base  reutilizable  para  portales  web  (3.3.1)  •  Diseño  del  agente  para  publicación  en  grupos  de  WhatsApp  (3.3.2)  •  Elaboración  de  mockups  de  la  interfaz  de  administración  (3.4.1)  •  Diagrama  de  flujo  del  proceso  de  publicación  automática  (3.4.2)  •  Diagrama  de  secuencia:  creación  vacante  →  publicación  (3.4.3)  •  Revisión  y  validación  del  diseño  con  Alloxentric  (3.4.4)  •  Ajustes  al  diseño  según  retroalimentación  (3.4.5)  •  Elaboración  Informe  de  Avance  N°2  (3.5)  
+•  ✅  Esquema  de  configuración  parametrizable  por  agente  •  ✅  Diseño  del  agente  base  reutilizable  (interfaz  y  comportamiento)  •  ✅  Diseño  del  agente  WhatsApp  Groups  •  ✅  Mockups  de  interfaz  de  administración  validados  •  ✅  Diagrama  de  flujo  de  publicación  automática  •  ✅  Diagrama  de  secuencia  creación  vacante  →  publicación  •  ✅  Diseño  validado  por  Alloxentric  •  ✅  Informe  de  Avance  N°2  (entrega:  25  de  mayo)  •  🎯  HITO:  Entrega  Avance  N°2  y  Defensa  —  25  May  2026 
+  FASE  3  —  Desarrollo  e  Implementación   |   26  mayo  –  8  junio  2026  Actividades  Clave Entregables 
+•  Implementación  del  modelo  de  datos  del  catálogo  de  portales  (4.1.1)  •  Implementación  del  agente  base  de  publicación  reutilizable  (4.1.2)  •  Implementación  agente  especializado:  Portal  Web  1  (4.1.4)  •  Implementación  agente  especializado:  grupos  de  WhatsApp  (4.1.5)  •  Implementación  agente  especializado:  Portal  Web  2  (4.2.1)  •  Integración  Sofi-Publ  con  flujo  de  creación  de  vacante  en  Sofi  (4.2.2)  •  Desarrollo  interfaz  de  administración  del  catálogo  —  Frontend  (4.2.3)  •  Pruebas  de  integración  entre  agentes  y  bot  de  WhatsApp  (4.2.5)  •  Corrección  de  errores  de  integración  y  ajustes  de  configuración  (4.2.6)  •  Elaboración  Informe  de  Avance  N°3  (4.3)  
+•  ✅  Catálogo  de  portales  implementado  y  funcional  •  ✅  Agente  base  reutilizable  implementado  •  ✅  Agente  Portal  Web  1  funcional  (publicación  real)  •  ✅  Agente  Portal  Web  2  funcional  •  ✅  Agente  WhatsApp  Groups  funcional  •  ✅  Integración  completa  con  Sofi  (trigger:  creación  de  vacante)  •  ✅  Interfaz  de  administración  del  catálogo  (Frontend)  •  ✅  Pruebas  de  integración  realizadas  y  errores  corregidos  •  ✅  Informe  de  Avance  N°3  (entrega:  8  de  junio)  •  🎯  HITO:  Entrega  Avance  N°3  y  Defensa  —  8  Jun  2026 
+  FASE  4  —  Validación,  Pruebas  y  Prototipo  Final   |   9  –  30  junio  2026  Actividades  Clave Entregables 
+Página  8  de  13
+ 
+Page 9:
+Plan  de  Trabajo  —  Módulo  Sofi-Publ    |     Gestión  de  Proyectos  Informáticos  —  Alloxentric
+ 
+•  Pruebas  funcionales  catálogo:  registro,  edición  y  habilitación  de  portales  (5.1.1)  •  Pruebas  funcionales  publicación  automática  en  portales  configurados  (5.1.2)  •  Pruebas  funcionales  del  agente  en  grupos  de  WhatsApp  (5.1.3)  •  Pruebas  flujo  completo:  vacante  →  publicación  en  todos  los  canales  (5.1.5)  •  Revisión  y  validación  del  prototipo  funcional  con  Alloxentric  (5.1.6)  •  Ajustes  UX/UI  de  interfaz  de  administración  según  feedback  (5.2.1)  •  Implementación  panel  de  estado  de  publicaciones  por  portal  (5.2.2)  •  Implementación  historial  de  publicaciones  y  log  de  actividad  (5.2.3)  •  Implementación  notificación  al  reclutador  vía  WhatsApp  (5.2.4)  •  Pruebas  SQA:  unitarias,  integración  y  validación  del  flujo  completo  (5.2.6)  •  Análisis  comparativo  manual  vs.  automatizado  (5.3.1)  •  Análisis  cobertura  de  portales  y  tiempos  de  publicación  (5.3.2)  •  Análisis  de  errores  y  comportamiento  de  agentes  (5.3.3)  •  Documentación  de  pruebas  y  métricas  de  desempeño  (5.3.5)  •  Conclusiones,  recomendaciones  y  propuesta  de  continuidad  (5.3.6-7)  
+•  ✅  Plan  de  pruebas  SQA  completo  •  ✅  Resultados  de  pruebas  funcionales  documentados  •  ✅  Prototipo  Sofi-Publ  v1  con  panel  de  estado  e  historial  •  ✅  Notificador  WhatsApp  al  reclutador  implementado  •  ✅  Validación  de  Alloxentric  sobre  el  prototipo  funcional  •  ✅  Análisis  comparativo:  proceso  manual  vs.  automatizado  •  ✅  Métricas  de  desempeño  del  sistema  documentadas  •  ✅  Conclusiones  y  recomendaciones  •  ✅  Propuesta  de  continuidad  (nuevos  portales,  mejoras  futuras)  •  🎯  HITO:  Entrega  Informe  Final  y  Borrador  Artículo  —  30  Jun  2026 
+  FASE  5  —  Documentación  Técnica  Final   |   22  –  30  junio  2026  Actividades  Clave Entregables 
+•  Recopilación  e  integración  de  información  del  proyecto  (5.4.1)  •  Elaboración  del  Informe  Final  —  Partes  1  y  2  (5.4.2,  5.4.7)  •  Elaboración  Artículo  Técnico  estructura  IMRAD  —  Partes  1  y  2  (5.4.3,  5.4.6)  •  Entrega  de  Prototipo  Funcional  Sofi-Publ  v1  (5.4.4)  •  Configuración  repositorio  GitHub  privado:  código,  agentes,  docs  (5.4.5)  •  Análisis  EVM  Final:  desempeño  real  vs.  planificado  (5.4.8)  •  Manual  de  Deployment  (puesta  en  producción)  
+•  ✅  Informe  Final  completo  del  proyecto  •  ✅  Artículo  Técnico  en  formato  IMRAD  (borrador  revisado)  •  ✅  Prototipo  Funcional  Sofi-Publ  v1  entregado  •  ✅  Repositorio  GitHub  privado  con  código  y  documentación  •  ✅  Manual  de  Deployment  completo  •  ✅  Manual  de  Usuario  con  capturas  de  pantalla  reales  •  ✅  Debug  Log  de  desafíos  técnicos  •  ✅  Análisis  EVM  Final  •  🎯  HITO:  Entrega  Informe  Final  y  Artículo  —  30  Jun  2026 
+Página  9  de  13
+ 
+Page 10:
+Plan  de  Trabajo  —  Módulo  Sofi-Publ    |     Gestión  de  Proyectos  Informáticos  —  Alloxentric
+ 
+•  Manual  de  Usuario  con  capturas  reales  del  sistema  •  Debug  Log:  registro  de  desafíos  técnicos  y  soluciones  
+  FASE  6  —  Preparación  y  Defensa  Final   |   1  –  13  julio  2026  Actividades  Clave Entregables 
+•  Revisión  y  consolidación  de  toda  la  documentación  entregada  (6.1.1)  •  Elaboración  de  la  presentación  PPT  para  defensa  final  (6.1.2)  •  Ajustes  finales  al  prototipo  y  repositorio  (6.1.3)  •  Ensayo  de  defensa  con  el  equipo  (6.1.4)  •  Ajustes  post-ensayo  a  presentación  y  prototipo  (6.1.6)  
+•  ✅  Presentación  PPT  de  defensa  final  •  ✅  Prototipo  funcional  demostrable  en  vivo  •  ✅  Repositorio  GitHub  final  y  ordenado  •  ✅  Documentación  completa  consolidada  •  🎯  HITO:  Defensa  Final  del  Proyecto  —  13  Jul  2026  
+  
+Página  10  de  13
+ 
+Page 11:
+Plan  de  Trabajo  —  Módulo  Sofi-Publ    |     Gestión  de  Proyectos  Informáticos  —  Alloxentric
+ 
+7.  Resumen  de  Hitos  y  Entregables  Académicos  
+ # Hito Fecha Entregable  Principal Estado 
+H1 Inicio  del  Proyecto  28  Mar  2026  
+Cronograma,  plan  
+SCRUM,
+ 
+backlog
+ 
+inicial
+ 
+✅  Completado 
+H2 
+Entrega  Avance  N°1  y  Defensa  
+27  Abr  2026  
+Informe  Avance  N°1,  arquitectura  preliminar,  
+stack
+ 
+tecnológico
+ 
+⏳  En  curso 
+H3 
+Entrega  Avance  N°2  y  Defensa  
+25  May  2026  
+Informe  Avance  N°2,  diseños  validados,  
+mockups
+ 
+⬜  Pendiente 
+H4 
+Entrega  Avance  N°3  y  Defensa  
+08  Jun  2026  
+Informe  Avance  N°3,  módulo  implementado  e  
+integrado
+ 
+⬜  Pendiente 
+H5 
+Entrega  Informe  Final  y  Artículo  
+30  Jun  2026  
+Informe  Final,  Artículo  IMRAD,  Prototipo  v1,  
+Repositorio
+ 
+GitHub
+ 
+⬜  Pendiente 
+H6 
+Defensa  Final  del  Proyecto  
+13  Jul  2026  
+Presentación  final,  demostración  en  vivo  del  
+prototipo
+ 
+⬜  Pendiente 
+  
+8.  Gestión  de  Riesgos  
+ 
+Riesgo Prob. 
+Impacto 
+Plan  de  Mitigación Plan  de  Contingencia 
+Los  portales  de  empleo  bloquean  el  scraping/automatización  (detección  de  bots)  
+Alta  Alto  
+Implementar  delays  realistas,  rotación  de  user-agents.  Usar  APIs  oficiales  donde  estén  
+disponibles.
+ 
+Priorizar  los  portales  con  API  oficial.  Si  un  portal  se  bloquea,  sustituir  por  otro  
+de
+ 
+la
+ 
+lista.
+ 
+Dificultades  de  acceso  al  código  fuente  de  Sofi  por  parte  del  equipo  
+Media  Alto  
+Gestionar  acceso  en  la  primera  semana  (sprint  1).  Documentar  acuerdos  
+de
+ 
+acceso
+ 
+con
+ 
+Alloxentric.
+ 
+Trabajar  con  documentación  de  APIs  de  Sofi  y  crear  mocks  
+para
+ 
+desarrollo
+ 
+paralelo.
+ 
+Cambios  en  requerimientos  por  parte  de  Alloxentric  durante  el  desarrollo  
+Media  Medio  
+Validar  y  congelar  requerimientos  al  cierre  de  Fase  1.  Gestionar  cambios  mediante  control  
+de
+ 
+cambios
+ 
+formal.
+ 
+Evaluar  impacto  en  cronograma.  Ajustar  alcance  del  sprint  afectado  y  comunicar  al  
+docente.
+ 
+Atrasos  en  implementación  por  complejidad  técnica  de  los  agentes  
+Media  Alto  
+Iniciar  desarrollo  con  el  agente  base  y  portal  más  simple.  Aplicar  timeboxing  
+estricto
+ 
+por
+ 
+sprint.
+ 
+Reducir  el  número  de  portales  en  la  v1.  Priorizar  funcionalidad  core  sobre  
+portales
+ 
+adicionales.
+ 
+Indisponibilidad  de  integrantes  del  equipo  
+Baja  Medio  
+Documentar  código  y  decisiones  continuamente.  Asegurar  que  mínimo  2  personas  
+conozcan
+ 
+cada
+ 
+módulo.
+ 
+Redistribuir  carga  entre  integrantes  disponibles.  Comunicar  al  docente  si  
+el
+ 
+impacto
+ 
+es
+ 
+significativo.
+ 
+Página  11  de  13
+ 
+Page 12:
+Plan  de  Trabajo  —  Módulo  Sofi-Publ    |     Gestión  de  Proyectos  Informáticos  —  Alloxentric
+ 
+Fallas  en  la  integración  del  módulo  con  el  bot  Sofi  existente  
+Media  Alto  
+Definir  contratos  de  API  claros  desde  el  diseño.  Realizar  pruebas  de  integración  tempranas  en  
+Fase
+ 
+3.
+ 
+Implementar  capa  de  adaptación.  Coordinar  con  Alloxentric  para  soporte  técnico  en  la  
+integración.
+   
+9.  Criterios  de  Éxito  del  Proyecto  
+ # Criterio Métrica  de  Verificación 
+1 
+El  módulo  publica  vacantes  automáticamente  en  mínimo  2  portales  web  distintos  
+Evidencia  de  publicación  real  en  al  menos  2  portales  durante  las  pruebas  SQA  
+2 
+El  flujo  completo  (creación  vacante  →  publicación  →  notificación)  opera  sin  intervención  manual  
+Prueba  de  flujo  end-to-end  exitosa  documentada  con  capturas  y  logs  
+3 
+El  catálogo  de  portales  permite  agregar,  editar,  habilitar  y  deshabilitar  portales  desde  la  interfaz  
+Pruebas  funcionales  del  CRUD  de  catálogo  aprobadas  
+4 
+El  módulo  registra  logs  auditables  de  cada  operación  (publicación,  falla,  activación)  
+Logs  verificados  contra  el  estándar  de  5  dimensiones  de  Alloxentric  
+5 
+El  tiempo  de  publicación  automatizado  es  significativamente  menor  al  proceso  manual  
+Reducción  documentada:  proceso  manual  ≥  30  min  →  automatizado  ≤  3  min  por  vacante  
+6 
+La  documentación  técnica  está  completa  y  permite  la  transferencia  tecnológica  a  Alloxentric  
+Entrega  de  informe  final,  manual  de  deployment  y  repositorio  GitHub  completo  
+7 
+El  prototipo  es  validado  positivamente  por  Alloxentric  
+Acta  o  correo  de  validación  de  Alloxentric  al  cierre  de  la  Fase  4    
+10.  Plan  de  Comunicación  y  Coordinación  
+ Canal  /  Evento Participantes Frecuencia Propósito 
+Reunión  de  Grupo  (Daily  adaptado)  
+Todo  el  equipo  
+Semanal  (16  sesiones) 
+Seguimiento  de  tareas,  resolución  de  impedimentos,  sincronización  del  sprint  
+Sprint  Planning  Todo  el  equipo  
+Inicio  de  cada  sprint 
+Planificación  del  trabajo  del  sprint  entrante  y  actualización  del  backlog  
+Página  12  de  13
+ 
+Page 13:
+Plan  de  Trabajo  —  Módulo  Sofi-Publ    |     Gestión  de  Proyectos  Informáticos  —  Alloxentric
+ 
+Sprint  Review  
+Equipo  +  Alloxentric  (validaciones)  
+Fin  de  sprint  /  avances 
+Revisión  de  trabajo  completado  y  retroalimentación  de  Alloxentric  
+Reunión  de  validación  con  Alloxentric  
+Equipo  +  representante  Alloxentric  
+3  instancias  formales  (ver  cronograma) 
+Validación  de  requerimientos  (F1),  diseño  (F2)  y  prototipo  (F4)  
+Defensa  académica  Equipo  +  docente  
+4  instancias  (H2,  H3,  H4,  H6) 
+Presentación  de  avances  y  defensa  ante  el  docente  evaluador  
+Repositorio  GitHub  Todo  el  equipo  Continuo 
+Control  de  versiones,  colaboración  en  código  y  almacenamiento  de  documentación  técnica   
+Página  13  de  13
+ 
+
+

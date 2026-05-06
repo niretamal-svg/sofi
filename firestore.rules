@@ -1,0 +1,129 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    function getUserClientId() {
+      return request.auth.token.client_id;
+    }
+
+    function getUserRole() {
+      return request.auth.token.role;
+    }
+
+    function isAdmin() {
+      return getUserRole() == 'admin';
+    }
+
+    function isReclutador() {
+      return getUserRole() in ['admin', 'reclutador'];
+    }
+
+    function isViewer() {
+      return getUserRole() in ['admin', 'reclutador', 'viewer'];
+    }
+
+    function belongsToUserClient(clientId) {
+      return clientId == getUserClientId();
+    }
+
+    // Default deny rule
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Users collection - each user can read/write their own document
+    match /users/{userId} {
+      allow read: if isAuth() && (request.auth.uid == userId || isAdmin());
+      allow write: if isAuth() && isAdmin();
+      allow create: if isAuth() && request.auth.uid == userId;
+    }
+
+    // Vacancies collection
+    match /vacancies/{vacancy} {
+      allow read: if isAuth() && belongsToUserClient(resource.data.client_id);
+      allow create: if isAuth() && isReclutador() && belongsToUserClient(request.resource.data.client_id);
+      allow update: if isAuth() && (
+        (isReclutador() && belongsToUserClient(resource.data.client_id)) ||
+        (isAdmin() && belongsToUserClient(resource.data.client_id))
+      );
+      allow delete: if isAuth() && isAdmin() && belongsToUserClient(resource.data.client_id);
+    }
+
+    // Campaigns collection
+    match /campaigns/{campaign} {
+      allow read: if isAuth() && belongsToUserClient(resource.data.client_id);
+      allow create: if isAuth() && isReclutador() && belongsToUserClient(request.resource.data.client_id);
+      allow update: if isAuth() && (
+        (isReclutador() && belongsToUserClient(resource.data.client_id)) ||
+        (isAdmin() && belongsToUserClient(resource.data.client_id))
+      );
+      allow delete: if isAuth() && isAdmin() && belongsToUserClient(resource.data.client_id);
+    }
+
+    // Job Profiles collection
+    match /job_profiles/{profile} {
+      allow read: if isAuth() && belongsToUserClient(resource.data.client_id);
+      allow create: if isAuth() && isReclutador() && belongsToUserClient(request.resource.data.client_id);
+      allow update: if isAuth() && isReclutador() && belongsToUserClient(resource.data.client_id);
+      allow delete: if isAuth() && isAdmin() && belongsToUserClient(resource.data.client_id);
+    }
+
+    // Categories collection - read-only for authenticated users within same client
+    match /categories/{category} {
+      allow read: if isAuth() && belongsToUserClient(resource.data.client_id);
+      allow create: if isAuth() && isAdmin() && belongsToUserClient(request.resource.data.client_id);
+      allow update: if isAuth() && isAdmin() && belongsToUserClient(resource.data.client_id);
+      allow delete: if isAuth() && isAdmin() && belongsToUserClient(resource.data.client_id);
+    }
+
+    // Portals collection
+    match /portals/{portal} {
+      allow read: if isAuth() && belongsToUserClient(resource.data.client_id);
+      allow create: if isAuth() && isAdmin() && belongsToUserClient(request.resource.data.client_id);
+      allow update: if isAuth() && isAdmin() && belongsToUserClient(resource.data.client_id);
+      allow delete: if isAuth() && isAdmin() && belongsToUserClient(resource.data.client_id);
+    }
+
+    // Portal Credentials subcollection (encrypted in database)
+    match /portals/{portal}/credentials/{cred} {
+      allow read: if isAuth() && belongsToUserClient(get(/databases/$(database)/documents/portals/$(portal)).data.client_id);
+      allow write: if isAuth() && isAdmin() && belongsToUserClient(get(/databases/$(database)/documents/portals/$(portal)).data.client_id);
+    }
+
+    // Payments collection
+    match /payments/{payment} {
+      allow read: if isAuth() && belongsToUserClient(resource.data.client_id);
+      allow create: if isAuth() && isReclutador() && belongsToUserClient(request.resource.data.client_id);
+      allow update: if isAuth() && isAdmin() && belongsToUserClient(resource.data.client_id);
+      allow delete: if isAuth() && isAdmin() && belongsToUserClient(resource.data.client_id);
+    }
+
+    // Companies collection
+    match /companies/{company} {
+      allow read: if isAuth() && belongsToUserClient(resource.data.client_id);
+      allow create: if isAuth() && isAdmin() && belongsToUserClient(request.resource.data.client_id);
+      allow update: if isAuth() && isAdmin() && belongsToUserClient(resource.data.client_id);
+      allow delete: if isAuth() && isAdmin() && belongsToUserClient(resource.data.client_id);
+    }
+
+    // Audit logs collection - admin only
+    match /audit_logs/{log} {
+      allow read: if isAuth() && isAdmin() && belongsToUserClient(resource.data.client_id);
+      allow create: if isAuth() && belongsToUserClient(request.resource.data.client_id);
+      allow update, delete: if false;
+    }
+
+    // Publication History subcollection
+    match /campaigns/{campaign}/publication_history/{entry} {
+      allow read: if isAuth() && belongsToUserClient(get(/databases/$(database)/documents/campaigns/$(campaign)).data.client_id);
+      allow create: if isAuth() && isReclutador() && belongsToUserClient(get(/databases/$(database)/documents/campaigns/$(campaign)).data.client_id);
+      allow update, delete: if false;
+    }
+
+  }
+}
