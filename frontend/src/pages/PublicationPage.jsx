@@ -1,6 +1,7 @@
 import React from 'react';
 import { usePublicationStore } from '../store/publicationStore';
 import Topbar from '../components/layout/Topbar';
+import { useAppSettings } from '../contexts/AppSettingsContext';
 import Stepper from '../components/common/Stepper';
 import Step1Vacancy from '../components/publication/Step1Vacancy';
 import Step2Profile from '../components/publication/Step2Profile';
@@ -11,59 +12,59 @@ const steps = ['Vacante', 'Perfil', 'Portales', 'Publicar'];
 
 export default function PublicationPage() {
   const { currentStep, setStep } = usePublicationStore();
+  const { t } = useAppSettings();
 
   return (
-    <div className="bg-bg min-h-screen">
+    <div className="min-h-screen bg-bg-main publication-shell">
       <Topbar />
 
       <div className="breadcrumb">
-        <a href="#/dashboard">Menú administrador</a>
+        <a href="#/dashboard">{t('menuLabel')}</a>
         <span>›</span>
-        <a href="#/dashboard">Gestión de vacantes</a>
+        <a href="#/dashboard">{t('publicationNav')}</a>
         <span>›</span>
-        <span>Publicación en portales</span>
+        <span>{t('publicationTitle')}</span>
       </div>
 
-      <div className="page">
-        <div className="section-title">Publicación en portales de empleo</div>
-        <div className="section-subtitle">Define el perfil, selecciona los portales y publica tu vacante en México y Centroamérica</div>
+      <div className="page publication-page">
+        <div className="grid gap-0">
+          <section className="card p-8">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h1 className="section-title">{t('publicationTitle')}</h1>
+                <p className="section-subtitle">{t('publicationSubtitle')}</p>
+              </div>
+            </div>
+          </section>
 
-        <div className="stepper">
-          <div className={`step ${currentStep > 1 ? 'done' : currentStep === 1 ? 'active' : ''}`} onClick={() => setStep(1)}>
-            <div className="step-num">{currentStep > 1 ? '✓' : '1'}</div>
-            <div className="step-info">
-              <div className="step-label">Paso 1</div>
-              <div className="step-name">Seleccionar vacante</div>
+          <section className="card p-8">
+            <div className="stepper grid gap-4 md:grid-cols-4">
+              {steps.map((step, index) => {
+                const stepNumber = index + 1;
+                const isCompleted = stepNumber < currentStep;
+                const isActive = stepNumber === currentStep;
+                return (
+                  <button
+                    key={step}
+                    type="button"
+                    onClick={() => setStep(stepNumber)}
+                    className={`step ${isCompleted ? 'done' : isActive ? 'active' : ''}`}
+                  >
+                    <div className="step-num">{isCompleted ? '✓' : stepNumber}</div>
+                    <p className="step-label">Paso {stepNumber}</p>
+                    <p className="step-name">{step}</p>
+                  </button>
+                );
+              })}
             </div>
-          </div>
-          <div className={`step ${currentStep > 2 ? 'done' : currentStep === 2 ? 'active' : ''}`} onClick={() => setStep(2)}>
-            <div className="step-num">{currentStep > 2 ? '✓' : '2'}</div>
-            <div className="step-info">
-              <div className="step-label">Paso 2</div>
-              <div className="step-name">Perfil & descripción</div>
-            </div>
-          </div>
-          <div className={`step ${currentStep > 3 ? 'done' : currentStep === 3 ? 'active' : ''}`} onClick={() => setStep(3)}>
-            <div className="step-num">{currentStep > 3 ? '✓' : '3'}</div>
-            <div className="step-info">
-              <div className="step-label">Paso 3</div>
-              <div className="step-name">Seleccionar portales</div>
-            </div>
-          </div>
-          <div className={`step ${currentStep === 4 ? 'active' : ''}`} onClick={() => setStep(4)}>
-            <div className="step-num">4</div>
-            <div className="step-info">
-              <div className="step-label">Paso 4</div>
-              <div className="step-name">Confirmar & publicar</div>
-            </div>
-          </div>
-        </div>
+          </section>
 
-        <div>
-          {currentStep === 1 && <Step1Vacancy />}
-          {currentStep === 2 && <Step2Profile />}
-          {currentStep === 3 && <Step3Portals />}
-          {currentStep === 4 && <Step4Confirm />}
+          <section className="card p-8">
+            {currentStep === 1 && <Step1Vacancy />}
+            {currentStep === 2 && <Step2Profile />}
+            {currentStep === 3 && <Step3Portals />}
+            {currentStep === 4 && <Step4Confirm />}
+          </section>
         </div>
       </div>
     </div>

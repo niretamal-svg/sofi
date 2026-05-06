@@ -26,7 +26,7 @@ export default function PortalCredentialsModal({ portal, onClose, onSave }) {
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg max-w-md w-full p-6">
+      <div className="bg-card rounded-lg max-w-md w-full p-6 dark:bg-[#111827]">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
             {portal?.logo_url && (
@@ -36,29 +36,29 @@ export default function PortalCredentialsModal({ portal, onClose, onSave }) {
                 className="w-8 h-8 object-contain"
               />
             )}
-            <h3 className="text-lg font-semibold text-gray-900">{portal?.nombre}</h3>
+            <h3 className="text-lg font-semibold text-text-main dark:text-white">{portal?.nombre}</h3>
           </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 transition-colors"
+            className="text-text-muted hover:text-text-main dark:text-slate-400 dark:hover:text-white transition-colors"
           >
             ✕
           </button>
         </div>
 
-        <p className="text-sm text-gray-600 mb-4">
+        <p className="text-sm text-text-muted dark:text-slate-400 mb-4">
           Por favor ingresa tus credenciales para publicar en este portal.
         </p>
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-text-muted dark:text-slate-400 mb-2">
               Usuario o correo
             </label>
             <input
               type="text"
               {...register('username', { required: 'Este campo es requerido' })}
-              className="input-primary"
+              className="input-field"
               placeholder="tu_usuario"
             />
             {errors.username && (
@@ -67,13 +67,13 @@ export default function PortalCredentialsModal({ portal, onClose, onSave }) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-text-muted dark:text-slate-400 mb-2">
               Contraseña
             </label>
             <input
               type="password"
               {...register('password', { required: 'Este campo es requerido' })}
-              className="input-primary"
+              className="input-field"
               placeholder="••••••••"
             />
             {errors.password && (

@@ -6,7 +6,7 @@ import {
   onAuthStateChanged,
   signInWithPopup,
   GoogleAuthProvider,
-  GithubAuthProvider,
+  OAuthProvider,
   sendPasswordResetEmail,
   updateProfile
 } from 'firebase/auth';
@@ -47,10 +47,10 @@ export function AuthProvider({ children }) {
     let provider;
     if (providerName === 'google') {
       provider = new GoogleAuthProvider();
-    } else if (providerName === 'github') {
-      provider = new GithubAuthProvider();
+    } else if (providerName === 'microsoft') {
+      provider = new OAuthProvider('microsoft.com');
     } else {
-      throw new Error("Proveedor no soportado");
+      throw new Error('Proveedor no soportado');
     }
     return signInWithPopup(auth, provider);
   };

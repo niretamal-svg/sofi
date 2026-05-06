@@ -18,7 +18,7 @@ export default function Stepper({ currentStep, steps, onStepClick }) {
                 'w-10 h-10 rounded-full font-bold flex items-center justify-center transition-all duration-150 flex-shrink-0',
                 isCompleted && 'bg-sofi-teal text-white',
                 isActive && 'bg-sofi-purple text-white ring-4 ring-sofi-purple ring-opacity-30',
-                stepNumber > currentStep && 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                stepNumber > currentStep && 'bg-gray-200 text-gray-400 cursor-not-allowed dark:bg-slate-700 dark:text-slate-400'
               )}
             >
               {isCompleted ? (
@@ -35,7 +35,7 @@ export default function Stepper({ currentStep, steps, onStepClick }) {
                 'text-sm font-medium',
                 isActive && 'text-sofi-purple',
                 isCompleted && 'text-sofi-teal',
-                stepNumber > currentStep && 'text-gray-400'
+                stepNumber > currentStep && 'text-gray-400 dark:text-slate-400'
               )}>
                 {step}
               </p>
@@ -44,7 +44,7 @@ export default function Stepper({ currentStep, steps, onStepClick }) {
             {stepNumber < steps.length && (
               <div className={clsx(
                 'w-12 h-1 hidden sm:block',
-                stepNumber < currentStep ? 'bg-sofi-teal' : 'bg-gray-200'
+                stepNumber < currentStep ? 'bg-sofi-teal' : 'bg-gray-200 dark:bg-slate-700'
               )} />
             )}
           </div>
