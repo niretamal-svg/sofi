@@ -11,6 +11,7 @@ import firebase_admin
 from firebase_admin import auth
 from fastapi import HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ async def verify_firebase_token(token: str) -> dict[str, Any]:
     """
     Verify Firebase ID token and return decoded claims.
     """
-    if token == "mock-token":
+    if token == "mock-token" and settings.enable_mocks and not settings.is_production():
         return {
             "uid": "mock-123",
             "email": "admin@sofi.com",

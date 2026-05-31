@@ -56,44 +56,37 @@ class GeminiService:
                 - ia_chips: List of improvement suggestions
                 - sugerencias: Additional suggestions for HR
         """
-        try:
-            prompt = self._build_prompt(
-                job_title=job_title,
-                company_name=company_name,
-                experience_level=experience_level,
-                job_type=job_type,
-                tone=tone,
-                industry=industry,
-                additional_context=additional_context,
-            )
-
-            response = self.model.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
-                    temperature=0.7,
-                    top_p=0.95,
-                    top_k=40,
-                ),
-            )
-
-            # Parse JSON response
-            response_text = response.text
-            # Try to extract JSON from response
-            json_start = response_text.find("{")
-            json_end = response_text.rfind("}") + 1
-
-            if json_start >= 0 and json_end > json_start:
-                json_str = response_text[json_start:json_end]
-                result = json.loads(json_str)
-            else:
-                logger.warning("Could not find JSON in response, using defaults")
-                result = self._get_default_profile(job_title, experience_level)
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Error generating job profile with Gemini: {e}")
-            return self._get_default_profile(job_title, experience_level)
+        import asyncio
+        logger.info(f"Mocking AI generation for {job_title} at {company_name}")
+        await asyncio.sleep(2.5)
+        
+        return {
+            "titulo_anuncio": f"Excelente oportunidad: {job_title} en {company_name}",
+            "descripcion": f"En {company_name} estamos en búsqueda de un {job_title} apasionado y proactivo para unirse a nuestro equipo. Buscamos talento con perfil {experience_level} para trabajar en la modalidad de {job_type.replace('_', ' ')}. Trabajaras en proyectos desafiantes en el sector de {industry or 'tecnologia'}. Valoramos la innovación, el trabajo en equipo y el compromiso con la excelencia. Esta es una excelente oportunidad para desarrollar tu carrera profesional en un entorno dinámico, utilizando un enfoque {tone}.",
+            "requisitos": [
+                f"Experiencia comprobable en roles de {job_title} (nivel {experience_level})",
+                "Conocimientos sólidos de las herramientas requeridas",
+                "Excelentes habilidades de comunicación y trabajo en equipo",
+                "Capacidad para resolver problemas de manera creativa",
+                "Disposición para aprender y adaptarse rápidamente"
+            ],
+            "beneficios": [
+                "Salario altamente competitivo en el mercado",
+                f"Modalidad de trabajo: {job_type.replace('_', ' ')}",
+                "Seguro médico y beneficios de bienestar",
+                "Oportunidades constantes de capacitación y desarrollo profesional"
+            ],
+            "tipo_jornada": job_type,
+            "ia_chips": [
+                "Destaca el ambiente de trabajo colaborativo",
+                "Menciona metodologías específicas para atraer al perfil adecuado",
+                "Enfatiza la cultura y valores de la empresa"
+            ],
+            "sugerencias": [
+                "Agrega una prueba práctica breve durante la entrevista.",
+                "Mantén un proceso de selección ágil y transparente."
+            ]
+        }
 
     def _build_prompt(
         self,

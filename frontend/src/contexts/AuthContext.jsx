@@ -13,6 +13,7 @@ import {
 import { auth } from '../firebase';
 
 const AuthContext = createContext();
+const mocksEnabled = import.meta.env.VITE_ENABLE_MOCKS !== 'false';
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -28,7 +29,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   const login = async (email, password) => {
-    if (email === "admin@sofi.com" && password === "admin123") {
+    if (mocksEnabled && email === "admin@sofi.com" && password === "admin123") {
       setUser({ email: email, uid: "mock-123", getIdToken: async () => "mock-token" });
       return;
     }

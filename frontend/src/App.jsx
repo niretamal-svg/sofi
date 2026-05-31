@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { AppSettingsProvider, useAppSettings } from './contexts/AppSettingsContext';
 import LoginPage from './pages/LoginPage';
 import PublicationPage from './pages/PublicationPage';
+import GuidePage from './pages/GuidePage';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -46,6 +47,14 @@ function AppContent() {
         element={
           <ProtectedRoute>
             <PublicationPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/guide"
+        element={
+          <ProtectedRoute>
+            <GuidePage />
           </ProtectedRoute>
         }
       />

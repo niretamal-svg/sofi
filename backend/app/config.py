@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     # Server
     api_prefix: str = "/api/v1"
     debug: bool = False
+    enable_mocks: bool = True
 
     class Config:
         env_file = ".env"

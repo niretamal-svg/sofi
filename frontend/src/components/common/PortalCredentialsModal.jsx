@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import toast from 'react-hot-toast';
+import { useAppSettings } from '../../contexts/AppSettingsContext';
 import { portalsApi } from '../../services/api';
 
 export default function PortalCredentialsModal({ portal, onClose, onSave }) {
+  const { t } = useAppSettings();
   const { register, handleSubmit, formState: { errors } } = useForm();
   const [loading, setLoading] = useState(false);
 
@@ -14,11 +16,11 @@ export default function PortalCredentialsModal({ portal, onClose, onSave }) {
         username: data.username,
         password: data.password,
       });
-      toast.success('Credenciales guardadas correctamente');
+      toast.success(t('credentialsSaved'));
       onSave?.();
       onClose();
     } catch (error) {
-      toast.error('Error al guardar las credenciales');
+      toast.error(t('credentialsSaveError'));
     } finally {
       setLoading(false);
     }
@@ -30,11 +32,7 @@ export default function PortalCredentialsModal({ portal, onClose, onSave }) {
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
             {portal?.logo_url && (
-              <img
-                src={portal.logo_url}
-                alt={portal.nombre}
-                className="w-8 h-8 object-contain"
-              />
+              <img src={portal.logo_url} alt={portal.nombre} className="w-8 h-8 object-contain" />
             )}
             <h3 className="text-lg font-semibold text-text-main dark:text-white">{portal?.nombre}</h3>
           </div>
@@ -42,22 +40,22 @@ export default function PortalCredentialsModal({ portal, onClose, onSave }) {
             onClick={onClose}
             className="text-text-muted hover:text-text-main dark:text-slate-400 dark:hover:text-white transition-colors"
           >
-            ✕
+            x
           </button>
         </div>
 
         <p className="text-sm text-text-muted dark:text-slate-400 mb-4">
-          Por favor ingresa tus credenciales para publicar en este portal.
+          {t('portalCredentialsHelp')}
         </p>
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-text-muted dark:text-slate-400 mb-2">
-              Usuario o correo
+              {t('usernameOrEmail')}
             </label>
             <input
               type="text"
-              {...register('username', { required: 'Este campo es requerido' })}
+              {...register('username', { required: t('requiredField') })}
               className="input-field"
               placeholder="tu_usuario"
             />
@@ -68,13 +66,13 @@ export default function PortalCredentialsModal({ portal, onClose, onSave }) {
 
           <div>
             <label className="block text-sm font-medium text-text-muted dark:text-slate-400 mb-2">
-              Contraseña
+              {t('passwordLabel')}
             </label>
             <input
               type="password"
-              {...register('password', { required: 'Este campo es requerido' })}
+              {...register('password', { required: t('requiredField') })}
               className="input-field"
-              placeholder="••••••••"
+              placeholder={t('passwordPlaceholder')}
             />
             {errors.password && (
               <p className="text-red-500 text-sm mt-1">{errors.password.message}</p>
@@ -82,19 +80,15 @@ export default function PortalCredentialsModal({ portal, onClose, onSave }) {
           </div>
 
           <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-800">
-            🔒 Tus credenciales se almacenan de forma cifrada y segura.
+            {t('secureCredentials')}
           </div>
 
           <div className="flex gap-3 pt-4">
             <button type="button" onClick={onClose} className="flex-1 btn-secondary">
-              Cancelar
+              {t('cancel')}
             </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="flex-1 btn-primary disabled:opacity-50"
-            >
-              {loading ? 'Guardando...' : 'Guardar credenciales'}
+            <button type="submit" disabled={loading} className="flex-1 btn-primary disabled:opacity-50">
+              {loading ? t('saving') : t('saveCredentials')}
             </button>
           </div>
         </form>

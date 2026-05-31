@@ -9,6 +9,61 @@ const api = axios.create({
   },
 });
 
+const mocksEnabled = import.meta.env.VITE_ENABLE_MOCKS !== 'false';
+
+const unwrapList = (response) => response.data?.data ?? response.data;
+const withMockFallback = async (request, fallback) => {
+  try {
+    return await request();
+  } catch (error) {
+    if (mocksEnabled) {
+      return typeof fallback === 'function' ? fallback(error) : fallback;
+    }
+    throw error;
+  }
+};
+
+const normalizePortal = (portal) => ({
+  ...portal,
+  modelo: portal.modelo ?? portal.modelo_empresa,
+  costo_estimado: portal.costo_estimado ?? portal.costo_base ?? 0,
+});
+const normalizeCampaign = (campaign) => ({
+  ...campaign,
+  status: campaign.status ?? campaign.estado,
+  portal_status: campaign.portal_status ?? Object.fromEntries(
+    (campaign.portales || []).map((portal) => [portal.portal_id, portal.estado])
+  ),
+});
+const isMongoObjectId = (value) => /^[a-f\d]{24}$/i.test(String(value || ''));
+
+const createMockCampaign = (data) => {
+  const selectedPortals = data.selected_portals || mockPortals.filter((portal) => data.portales.includes(portal.id));
+  const newCamp = {
+    id: 'camp-' + Date.now(),
+    estado: 'borrador',
+    status: 'borrador',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    portales: selectedPortals.map((portal) => ({
+      portal_id: portal.id,
+      nombre_portal: portal.nombre,
+      estado: 'pendiente',
+      costo_estimado: portal.costo_estimado ?? portal.costo_base ?? 0,
+      url_publicacion: null,
+      id_externo: null,
+      intentos: 0,
+      ultimo_intento: null,
+      error_msg: null,
+      publicado_en: null,
+    })),
+    ...data,
+  };
+  newCamp.portal_status = Object.fromEntries(newCamp.portales.map((portal) => [portal.portal_id, portal.estado]));
+  mockCampaigns.push(newCamp);
+  return newCamp;
+};
+
 api.interceptors.request.use(async (config) => {
   try {
     const token = await auth.currentUser?.getIdToken();
@@ -25,10 +80,9 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      console.warn('401 Unauthorized caught by interceptor. Falling back to mock data for UI testing.');
-      // window.location.href = '/login'; // Disabled to allow UI testing
+      console.warn('401 Unauthorized caught by interceptor.');
     } else if (error.response?.status === 403) {
-      console.warn('403 Forbidden caught by interceptor. Falling back to mock data if configured.');
+      console.warn('403 Forbidden caught by interceptor.');
     }
     return Promise.reject(error);
   }
@@ -92,6 +146,22 @@ const mockPortals = [
     paises: ['US'], costo_estimado: 1200
   },
   {
+    id: 'portal-11', nombre: 'Trabajando Chile', modelo: 'freemium', costo_base: 0,
+    paises: ['CL'], costo_estimado: 0
+  },
+  {
+    id: 'portal-12', nombre: 'Laborum Chile', modelo: 'pago', costo_base: 35000,
+    paises: ['CL'], costo_estimado: 35000
+  },
+  {
+    id: 'portal-13', nombre: 'Chiletrabajos', modelo: 'gratis', costo_base: 0,
+    paises: ['CL'], costo_estimado: 0
+  },
+  {
+    id: 'portal-14', nombre: 'Computrabajo Chile', modelo: 'pago', costo_base: 30000,
+    paises: ['CL'], costo_estimado: 30000
+  },
+  {
     id: 'portal-10', nombre: 'Glassdoor', modelo: 'gratis', costo_base: 0, 
     paises: ['GLOBAL']
   }
@@ -99,14 +169,21 @@ const mockPortals = [
 
 export const vacanciesApi = {
   getAll: (filters = {}) =>
-    api.get('/vacancies', { params: filters }).then((res) => res.data).catch(() => mockVacancies),
+    withMockFallback(
+      () => api.get('/vacancies', { params: filters }).then(unwrapList),
+      () => mockVacancies
+    ),
   create: (data) =>
-    api.post('/vacancies', data).then((res) => res.data).catch(() => {
+    withMockFallback(() => api.post('/vacancies', data).then((res) => res.data), () => {
       const company = mockCompanies.find(c => c.id === data.empresa_id) || { nombre: 'Demo Empresa' };
       const category = mockCategories.find(c => c.id === data.categoria_id) || { nombre: 'Demo Categoría' };
+      const nextCodeNumber = mockVacancies.reduce((max, vacancy) => {
+        const match = String(vacancy.codigo || '').match(/VAC-(\d+)/i);
+        return match ? Math.max(max, Number(match[1])) : max;
+      }, 0) + 1;
       const newVac = { 
         id: 'vac-' + Date.now(), 
-        codigo: 'VAC-' + Math.floor(Math.random() * 1000),
+        codigo: data.codigo || `VAC-${String(nextCodeNumber).padStart(3, '0')}`,
         ...data,
         empresa: company,
         categoria: category
@@ -115,22 +192,28 @@ export const vacanciesApi = {
       return newVac;
     }),
   getById: (id) =>
-    api.get(`/vacancies/${id}`).then((res) => res.data).catch(() => mockVacancies.find(v => v.id === id)),
+    withMockFallback(
+      () => api.get(`/vacancies/${id}`).then((res) => res.data),
+      () => mockVacancies.find(v => v.id === id)
+    ),
   update: (id, data) =>
     api.put(`/vacancies/${id}`, data).then((res) => res.data),
 };
 
 export const profilesApi = {
   getAll: (filters = {}) =>
-    api.get('/profiles', { params: filters }).then((res) => res.data).catch(() => mockProfiles),
+    withMockFallback(
+      () => api.get('/profiles', { params: filters }).then(unwrapList),
+      () => mockProfiles
+    ),
   create: (data) =>
-    api.post('/profiles', data).then((res) => res.data).catch(() => {
+    withMockFallback(() => api.post('/profiles', data).then((res) => res.data), () => {
       const newProf = { id: 'prof-' + Date.now(), ...data };
       mockProfiles.push(newProf);
       return newProf;
     }),
   generateWithAI: (data) =>
-    api.post('/profiles/ai/generate', data).then((res) => res.data).catch(async () => {
+    withMockFallback(() => api.post('/profiles/ai/generate', data).then((res) => res.data), async () => {
       // Simulate AI delay
       await new Promise(resolve => setTimeout(resolve, 2000));
       return {
@@ -147,29 +230,82 @@ export const profilesApi = {
 
 export const portalsApi = {
   getAll: (filters = {}) =>
-    api.get('/portals', { params: filters }).then((res) => res.data).catch(() => mockPortals),
+    withMockFallback(
+      () => api.get('/portals', { params: filters }).then((res) => unwrapList(res).map(normalizePortal)),
+      () => mockPortals.map(normalizePortal)
+    ),
   saveCredentials: (portalId, credentials) =>
-    api.put(`/portals/${portalId}/credentials`, credentials).then((res) => res.data).catch(() => ({ success: true })),
+    withMockFallback(
+      () => api.put(`/portals/${portalId}/credentials`, credentials).then((res) => res.data),
+      () => ({ success: true })
+    ),
 };
 
 export const campaignsApi = {
+  getAll: (filters = {}) =>
+    withMockFallback(
+      () => api.get('/campaigns', { params: filters }).then((res) => unwrapList(res).map(normalizeCampaign)),
+      () => mockCampaigns.map(normalizeCampaign)
+    ),
   create: (data) =>
-    api.post('/campaigns', data).then((res) => res.data).catch(() => {
-      const newCamp = { id: 'camp-' + Date.now(), estado: 'borrador', ...data };
-      mockCampaigns.push(newCamp);
-      return newCamp;
-    }),
+    mocksEnabled && (!isMongoObjectId(data.vacante_id) || data.portales.some((portalId) => !isMongoObjectId(portalId)))
+      ? Promise.resolve(createMockCampaign(data))
+      : withMockFallback(
+          () => api.post('/campaigns', data).then((res) => normalizeCampaign(res.data)),
+          () => createMockCampaign(data)
+        ),
   getById: (id) =>
-    api.get(`/campaigns/${id}`).then((res) => res.data).catch(() => mockCampaigns.find(c => c.id === id)),
-  publish: (id) =>
-    api.post(`/campaigns/${id}/publish`).then((res) => res.data).catch(async () => {
-      await new Promise(resolve => setTimeout(resolve, 1500));
+    (mocksEnabled && !isMongoObjectId(id)
+      ? Promise.reject(new Error('mock campaign'))
+      : api.get(`/campaigns/${id}`).then((res) => normalizeCampaign(res.data))
+    ).catch((error) => {
+      if (!mocksEnabled) throw error;
       const camp = mockCampaigns.find(c => c.id === id);
-      if(camp) camp.estado = 'publicando';
+      if (!camp) return undefined;
+
+      if (camp.estado === 'publicando' && Date.now() - (camp.publish_started_at || 0) > 3000) {
+        camp.estado = 'publicada';
+        camp.status = 'publicada';
+        camp.updated_at = new Date().toISOString();
+        camp.portales = camp.portales.map((portal) => ({
+          ...portal,
+          estado: 'publicada',
+          intentos: Math.max(portal.intentos || 0, 1),
+          ultimo_intento: portal.ultimo_intento || new Date().toISOString(),
+          publicado_en: portal.publicado_en || new Date().toISOString(),
+          url_publicacion: portal.url_publicacion || `https://demo.sofi.local/publicaciones/${id}/${portal.portal_id}`,
+          id_externo: portal.id_externo || `SOFI-${portal.portal_id}-${String(id).slice(-5)}`,
+        }));
+        camp.portal_status = Object.fromEntries(camp.portales.map((portal) => [portal.portal_id, portal.estado]));
+      }
+
+      return camp;
+    }),
+  publish: (id) =>
+    (mocksEnabled && !isMongoObjectId(id)
+      ? Promise.reject(new Error('mock campaign'))
+      : api.post(`/campaigns/${id}/publish`).then((res) => normalizeCampaign(res.data))
+    ).catch(async (error) => {
+      if (!mocksEnabled) throw error;
+      await new Promise(resolve => setTimeout(resolve, 600));
+      const camp = mockCampaigns.find(c => c.id === id);
+      if (camp) {
+        camp.estado = 'publicando';
+        camp.status = 'publicando';
+        camp.publish_started_at = Date.now();
+        camp.updated_at = new Date().toISOString();
+        camp.portales = camp.portales.map((portal) => ({
+          ...portal,
+          estado: 'publicando',
+          intentos: (portal.intentos || 0) + 1,
+          ultimo_intento: new Date().toISOString(),
+        }));
+        camp.portal_status = Object.fromEntries(camp.portales.map((portal) => [portal.portal_id, portal.estado]));
+      }
       return camp;
     }),
   cancel: (id) =>
-    api.post(`/campaigns/${id}/cancel`).then((res) => res.data),
+    api.patch(`/campaigns/${id}`, { estado: 'cancelada' }).then((res) => normalizeCampaign(res.data)),
 };
 
 export const paymentsApi = {
@@ -181,12 +317,30 @@ export const paymentsApi = {
 
 export const companiesApi = {
   getAll: () =>
-    api.get('/companies').then((res) => res.data).catch(() => mockCompanies),
+    withMockFallback(
+      () => api.get('/companies').then(unwrapList),
+      () => mockCompanies
+    ),
+  create: (data) =>
+    withMockFallback(() => api.post('/companies', data).then((res) => res.data), () => {
+      const newCompany = { id: 'comp-' + Date.now(), ...data };
+      mockCompanies.push(newCompany);
+      return newCompany;
+    }),
 };
 
 export const categoriesApi = {
   getAll: () =>
-    api.get('/categories').then((res) => res.data).catch(() => mockCategories),
+    withMockFallback(
+      () => api.get('/categories').then(unwrapList),
+      () => mockCategories
+    ),
+  create: (data) =>
+    withMockFallback(() => api.post('/categories', data).then((res) => res.data), () => {
+      const newCategory = { id: 'cat-' + Date.now(), ...data };
+      mockCategories.push(newCategory);
+      return newCategory;
+    }),
 };
 
 export default api;

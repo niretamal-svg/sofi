@@ -61,7 +61,7 @@ Sofi is a job publication management platform that helps HR teams and recruitmen
             │              │              │
             ▼              ▼              ▼
     ┌────────────┐  ┌────────────┐  ┌─────────────┐
-    │  Firestore │  │   Stripe   │  │Google Gemini│
+    │   MongoDB  │  │   Stripe   │  │Google Gemini│
     │  (Cloud    │  │   (Payments)   │ (AI)        │
     │  Database) │  └────────────┘  └─────────────┘
     └────────────┘
@@ -87,8 +87,8 @@ Sofi is a job publication management platform that helps HR teams and recruitmen
 ### Backend
 - **Python 3.12**: Server runtime
 - **FastAPI**: Modern async web framework
-- **Firestore**: NoSQL cloud database
-- **Firebase Admin SDK**: Authentication and database
+- **MongoDB**: Primary application database
+- **Firebase Admin SDK**: Authentication and token verification
 - **Stripe API**: Payment processing
 - **Google Generative AI (Gemini)**: AI-powered features
 - **Pydantic**: Data validation
@@ -97,7 +97,7 @@ Sofi is a job publication management platform that helps HR teams and recruitmen
 ### Infrastructure
 - **Docker & Docker Compose**: Containerization
 - **Nginx**: Web server and reverse proxy
-- **Firebase**: Backend-as-a-Service (Auth, Firestore, Cloud Functions)
+- **Firebase**: Authentication provider
 - **Google Cloud Platform**: Hosting and AI services
 - **Stripe**: Payment processing
 
@@ -258,7 +258,8 @@ API_DESCRIPTION=Job Publication Management API
 CORS_ORIGINS=["http://localhost:3000", "http://localhost:5173"]
 
 # Database
-FIRESTORE_DATABASE=sofi
+MONGODB_URI=mongodb://mongodb:27017
+MONGODB_DB_NAME=sofi_db
 ```
 
 #### Stripe Configuration
@@ -295,9 +296,14 @@ VITE_FIREBASE_APP_ID=1:123456789:web:abc123def456
 
 # Stripe Public Key
 VITE_STRIPE_PUBLISHABLE_KEY=pk_test_your_key
+
+# Optional local demo fallback. Keep false outside intentional UI demos.
+VITE_ENABLE_MOCKS=false
 ```
 
 ## Firebase Setup
+
+Firebase is used for authentication. The current backend stores application data in MongoDB (`vacancies`, `campaigns`, `job_profiles`, `categories`, `portals`, `companies`, `payments`, and related collections).
 
 ### 1. Create a Firebase Project
 
@@ -307,17 +313,15 @@ VITE_STRIPE_PUBLISHABLE_KEY=pk_test_your_key
 4. Enable Google Analytics (optional)
 5. Create project
 
-### 2. Enable Firestore Database
+### 2. Configure MongoDB
 
-1. In Firebase Console, go to **Firestore Database**
-2. Click **Create Database**
-3. Select **Start in production mode** (you'll configure security rules)
-4. Choose your region (e.g., `us-central1`)
-5. Click **Create**
+1. Use the MongoDB service from `docker-compose.yml`, or provide your own MongoDB URI.
+2. Set `MONGODB_URI` and `MONGODB_DB_NAME` in the backend `.env`.
+3. Collections are created by the backend when records are inserted.
 
 ### 3. Set Up Collections
 
-The following collections will be created automatically by the backend or setup script:
+The following MongoDB collections will be created automatically by the backend or setup script:
 
 - **clients**: Client/tenant configuration
 - **users**: User profiles and metadata
@@ -330,35 +334,16 @@ The following collections will be created automatically by the backend or setup 
 - **payments**: Payment records
 - **audit_logs**: Audit trail for compliance
 
-### 4. Deploy Security Rules
+### 4. Create Firebase Service Account
 
 1. Create a service account:
    - Go to **Project Settings** → **Service Accounts**
    - Click **Generate new private key**
    - Save the JSON file securely
 
-2. Deploy firestore.rules:
-   ```bash
-   firebase login
-   firebase deploy --only firestore:rules
-   ```
+### 5. Initialize Client with Setup Script
 
-3. Deploy firestore indexes (if needed):
-   ```bash
-   firebase deploy --only firestore:indexes
-   ```
-
-### 5. Set Up Firestore Indexes
-
-Indexes are defined in `firestore.indexes.json`. Deploy with:
-
-```bash
-firebase deploy --only firestore:indexes
-```
-
-### 6. Initialize Client with Setup Script
-
-Once Firebase is configured, initialize your first client:
+Once Firebase Auth and MongoDB are configured, initialize your first client:
 
 ```bash
 export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
@@ -513,7 +498,7 @@ Sofi is built as a multi-tenant SaaS platform where each company is a separate t
 ### Tenant Isolation
 
 1. **Client ID**: Every document contains a `client_id` field
-2. **Security Rules**: Firestore rules ensure users can only access documents with their `client_id`
+2. **Backend Filters**: MongoDB queries are filtered by the authenticated user's `client_id`
 3. **Custom Claims**: User's Firebase custom claims contain their assigned `client_id`
 4. **Backend Validation**: All queries automatically filtered by user's `client_id`
 
@@ -772,8 +757,7 @@ curl -H "Authorization: Bearer $ID_TOKEN" \
 ### Production Checklist
 
 - [ ] Firebase project configured for production
-- [ ] Firestore rules deployed
-- [ ] Firestore indexes deployed
+- [ ] MongoDB instance configured and backed up
 - [ ] Environment variables set on Cloud Run
 - [ ] CORS origins configured
 - [ ] Stripe production keys configured
@@ -801,7 +785,7 @@ curl -H "Authorization: Bearer $ID_TOKEN" \
 - Verify Firebase project ID matches `.env`
 - Check user exists in Firebase Console → Authentication
 - Verify custom claims are set: `firebase auth:get <user-id>`
-- Check security rules: `firebase firestore:rules:list`
+- Confirm the user document and Firebase custom claims use the same `client_id`
 
 ### Portal publication fails
 - Verify portal credentials are correct and encrypted
