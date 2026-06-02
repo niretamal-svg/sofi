@@ -84,25 +84,69 @@ async def create_campaign(
     try:
         now = datetime.utcnow()
 
+        if not ObjectId.is_valid(campaign.vacante_id):
+            raise HTTPException(status_code=400, detail="Invalid vacancy ID")
+        if not ObjectId.is_valid(campaign.empresa_id):
+            raise HTTPException(status_code=400, detail="Invalid company ID")
+        if campaign.perfil_id and not ObjectId.is_valid(campaign.perfil_id):
+            raise HTTPException(status_code=400, detail="Invalid profile ID")
+
+        vacancies_col = get_collection("vacancies")
+        companies_col = get_collection("companies")
+        profiles_col = get_collection("job_profiles")
+
+        vacancy_doc = await vacancies_col.find_one({
+            "_id": ObjectId(campaign.vacante_id),
+            "client_id": client_id,
+        })
+        if not vacancy_doc:
+            raise HTTPException(status_code=404, detail="Vacancy not found")
+
+        company_doc = await companies_col.find_one({
+            "_id": ObjectId(campaign.empresa_id),
+            "client_id": client_id,
+        })
+        if not company_doc:
+            raise HTTPException(status_code=404, detail="Company not found")
+
+        if campaign.perfil_id:
+            profile_doc = await profiles_col.find_one({
+                "_id": ObjectId(campaign.perfil_id),
+                "client_id": client_id,
+            })
+            if not profile_doc:
+                raise HTTPException(status_code=404, detail="Profile not found")
+
         portals_col = get_collection("portals")
         portals_status = []
         
         for portal_id in campaign.portales:
-            if ObjectId.is_valid(portal_id):
-                portal_doc = await portals_col.find_one({"_id": ObjectId(portal_id)})
-                if portal_doc:
-                    portals_status.append({
-                        "portal_id": portal_id,
-                        "nombre_portal": portal_doc.get("nombre"),
-                        "estado": "pendiente",
-                        "costo_estimado": portal_doc.get("costo_base", 0.0),
-                        "url_publicacion": None,
-                        "id_externo": None,
-                        "intentos": 0,
-                        "ultimo_intento": None,
-                        "error_msg": None,
-                        "publicado_en": None,
-                    })
+            if not ObjectId.is_valid(portal_id):
+                raise HTTPException(status_code=400, detail=f"Invalid portal ID: {portal_id}")
+
+            portal_doc = await portals_col.find_one({
+                "_id": ObjectId(portal_id),
+                "client_id": client_id,
+                "activo": True,
+            })
+            if not portal_doc:
+                raise HTTPException(status_code=404, detail=f"Portal not found or inactive: {portal_id}")
+
+            portals_status.append({
+                "portal_id": portal_id,
+                "nombre_portal": portal_doc.get("nombre"),
+                "estado": "pendiente",
+                "costo_estimado": portal_doc.get("costo_base", 0.0),
+                "url_publicacion": None,
+                "id_externo": None,
+                "intentos": 0,
+                "ultimo_intento": None,
+                "error_msg": None,
+                "publicado_en": None,
+            })
+
+        if not portals_status:
+            raise HTTPException(status_code=400, detail="At least one valid portal is required")
 
         campaign_data = {
             "client_id": client_id,
@@ -129,6 +173,8 @@ async def create_campaign(
 
         return _campaign_data_to_response(campaign_data)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error creating campaign: {e}")
         raise HTTPException(status_code=500, detail="Failed to create campaign")
@@ -269,6 +315,21 @@ async def update_campaign(
     except Exception as e:
         logger.error(f"Error updating campaign: {e}")
         raise HTTPException(status_code=500, detail="Failed to update campaign")
+
+
+@router.post("/{campaign_id}/cancel", response_model=CampaignResponse)
+async def cancel_campaign(
+    campaign_id: str,
+    client_id: str = Depends(get_client_id),
+    collection = Depends(get_campaigns_collection),
+) -> CampaignResponse:
+    """Cancel a campaign using an explicit action endpoint."""
+    return await update_campaign(
+        campaign_id=campaign_id,
+        update_data=CampaignUpdate(estado=EstadoCampania.CANCELADA),
+        client_id=client_id,
+        collection=collection,
+    )
 
 
 # ============================================================================

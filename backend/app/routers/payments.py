@@ -174,7 +174,7 @@ async def stripe_webhook(
                             {"_id": ObjectId(campaign_id)},
                             {"$set": {
                                 "pago_id": str(payment_id),
-                                "estado": "pendiente_pago",
+                                "estado": "borrador",
                                 "updated_at": datetime.utcnow(),
                             }}
                         )
