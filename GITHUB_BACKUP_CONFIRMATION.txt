@@ -1,0 +1,16 @@
+PROYECTO SUBIDO A GITHUB
+
+Repositorio:
+https://github.com/niretamal-svg/sofi.git
+
+Rama:
+main
+
+Confirmacion:
+Este proyecto fue subido correctamente a GitHub antes de formatear el PC.
+
+Ultimo commit verificado antes de crear este archivo:
+cb38e863
+
+Fecha de confirmacion:
+2026-06-06
