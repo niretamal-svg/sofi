@@ -1,1 +1,0 @@
-"""Sofi FastAPI Backend Application"""
